@@ -6,6 +6,8 @@
 
 20 个节点不会获得 20 倍请求额度。协调器同时只允许一个官方请求，普通间隔 3 秒，重复 429 后间隔 5 秒；所有节点和后续运行共用持久化的 Retry-After 截止时间。切换游戏等待 10 秒。
 
+同时活跃的游戏会话最多 6 个，其余节点等待领取，不提前登录官方。已观测到请求间隔 61–62 秒时返回 `GAME_REOPENED`，因此不能让 20 个会话同时竞争共享节流。6 个是保守运行上限，不代表已确认官方超时阈值；已领取游戏结束后自动释放位置。
+
 Secrets：`OAKS_SSH_KEY`、`OAKS_KNOWN_HOSTS`、`OAKS_SSH_HOST`、`OAKS_MONGO_HOST`、`OAKS_MONGO_URI`。Mongo URI 指向 Runner 的本地 SSH 隧道端口 27018，禁止开放数据库公网端口。SSH 主机密钥必须来自已核实的主机记录。
 
 测试服先安装 `actions/coordinator.py`。旧采集容器必须停止，并存在 `output/actions-handoff.json` 交接证明。协调器每次放行官方请求前再次检查旧容器，跨运行队列所有权落盘于 `output/.actions/queue.json`。

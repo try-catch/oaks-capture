@@ -80,6 +80,16 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(json.JSONDecodeError):
             self.call('status')
 
+    def test_active_session_cap_and_next_game_after_release(self):
+        state = read(self.store.state_path)
+        for number in range(2, 7):
+            state['claims'][f'busy_{number}'] = {'worker': str(number), 'status': 'running'}
+        atomic(self.store.state_path, state)
+        self.assertEqual(self.call('claim')['wait'], 3000)
+        self.assertNotIn('two', read(self.store.state_path)['claims'])
+        self.call('done', status='incomplete', count=1)
+        self.assertEqual(self.call('claim')['slug'], 'two')
+
     def test_fifo_prevents_fast_worker_starvation_and_expires_only_waiters(self):
         self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)
         second = dict(op='permit', run='100-1', worker='2', slug='two', key='b' * 64, request={})

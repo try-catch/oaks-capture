@@ -110,6 +110,9 @@ class Store:
                 return {'stop': True, 'until': state['until']}
             if now < state['until']:
                 return {'wait': min(30_000, state['until'] - now), 'deadline': state['deadline']}
+            # 已观测到间隔 61–62 秒的会话返回 GAME_REOPENED；为共享节流保留余量。
+            if sum(claim.get('status') == 'running' for claim in state['claims'].values()) >= 6:
+                return {'wait': 3000, 'deadline': state['deadline']}
             for slug in state['games']:
                 if slug in state['claims']:
                     continue

@@ -10,6 +10,19 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
+
+
+def completed_attempt(run, token):
+    if not token or not re.fullmatch(r'[0-9]+-[0-9]+', run):
+        return False
+    run_id, attempt = run.split('-')
+    request = urllib.request.Request(
+        f'https://api.github.com/repos/try-catch/oaks-capture/actions/runs/{run_id}/attempts/{attempt}',
+        headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'User-Agent': 'oaks-queue-lock'})
+    with urllib.request.urlopen(request, timeout=15) as response:
+        result = json.load(response)
+    return result.get('status') == 'completed' and result.get('run_attempt') == int(attempt)
 
 
 def atomic(path, value):
@@ -68,7 +81,10 @@ class Store:
                 if old != 'false':
                     raise ValueError('旧采集容器未停止')
             if state['owner']:
-                raise ValueError('存在未释放的跨环境队列锁，需要核实旧 Actions 运行状态')
+                if not completed_attempt(state['owner'], req.get('githubToken', '')):
+                    raise ValueError('存在未释放的跨环境队列锁，需要核实旧 Actions 运行状态')
+                # 仅在 GitHub 证明旧 attempt 已结束后回收队列所有权；未知请求日志仍禁止重放。
+                state.update(owner=None, permit=None)
             handoff = read(self.root / 'output' / 'actions-handoff.json', {})
             if handoff.get('migrationState') != 'stopped':
                 raise ValueError('缺少已停止的交接证明')

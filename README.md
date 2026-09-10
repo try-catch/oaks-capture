@@ -14,6 +14,6 @@ Secrets：`OAKS_SSH_KEY`、`OAKS_KNOWN_HOSTS`、`OAKS_SSH_HOST`、`OAKS_MONGO_HO
 
 达到覆盖要求后立即执行 validate、audit-mongo --target test、finalize-data --target test。仅 accepted 状态可进入另行执行的资源与 Ops Agent 发布门禁；本 workflow 不直接启动游戏服务或改变发布状态。
 
-如果 workflow 被强制取消，最后的 finish 未能释放锁，应先核实 GitHub run 已结束、没有 worker 在执行，再用同一 run/attempt 调用 end。禁止按计时器抢占未确认的请求或队列锁。
+如果 workflow 被强制取消而 finish 未能释放锁，下次 begin 使用当前 job 的只读 GitHub Token 查询旧 run/attempt；只有 GitHub 确认旧 attempt 已 completed 才回收队列所有权。Token 只通过 SSH 标准输入传递，不落盘。未知请求日志仍会阻止该请求自动重放，需要人工核实。禁止按计时器抢占未确认的请求或队列锁。
 
 验证：`npm run check`、`npm test`、`python3 -m unittest discover -s actions -p 'test_*.py'`。这些测试使用合成协议与临时目录，不发真实采集请求。

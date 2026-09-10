@@ -84,7 +84,7 @@ async function main(): Promise<void> {
     throw new Error('采集仅允许在 GitHub-hosted Linux Runner 执行');
   }
   const mode = process.argv[2];
-  if (mode === 'begin') { console.log(JSON.stringify(rpc('begin'))); return; }
+  if (mode === 'begin') { console.log(JSON.stringify(rpc('begin', { githubToken: process.env.OAKS_GITHUB_TOKEN }))); return; }
   if (mode === 'end') { console.log(JSON.stringify(rpc('end'))); return; }
   if (mode === 'status') { console.log(JSON.stringify(rpc('status'))); return; }
   if (mode === 'check') {

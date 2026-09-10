@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from coordinator import Store, atomic, read
 
 
@@ -85,6 +86,17 @@ class RecoveryTests(unittest.TestCase):
         atomic(self.store.state_path, state)
         self.assertGreater(self.call('claim')['wait'], 0)
         self.assertEqual(len(self.call('status')['claims']), 1)
+
+    def test_reclaim_requires_github_terminal_attempt_evidence(self):
+        self.call('permit', key=self.key, request={})
+        with patch('coordinator.completed_attempt', return_value=False):
+            with self.assertRaises(ValueError):
+                self.store.call({'op': 'begin', 'run': '200-1', 'githubToken': 'fixture'}, check_legacy=False)
+        with patch('coordinator.completed_attempt', return_value=True):
+            self.store.call({'op': 'begin', 'run': '200-1', 'githubToken': 'fixture'}, check_legacy=False)
+        self.assertEqual(read(self.store.state_path)['owner'], '200-1')
+        self.assertNotIn('fixture', self.store.state_path.read_text())
+        self.assertTrue((self.store.directory / 'one' / (self.key + '.json')).exists())
 
 
 if __name__ == '__main__':

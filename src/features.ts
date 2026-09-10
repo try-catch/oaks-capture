@@ -52,7 +52,7 @@ export function classifyRound(frames: JSONMap[]): FeatureEvidence[] {
     if (current.includes("free") || context.freespins || context.free_spins) {
       addEvidence(result, "free-spins", index, `data.${index}.context.${current || "freespins"}`, "进入免费旋转状态");
     }
-    if (current.includes("respin") || context.respins) {
+    if (current.includes("respin") || context.respins || lastAction === "respin") {
       addEvidence(result, "respin", index, `data.${index}.context.${current || "respins"}`, "进入重转状态");
     }
     if (current.includes("bonus") || context.bonus) {
@@ -96,6 +96,15 @@ export function classifyRound(frames: JSONMap[]): FeatureEvidence[] {
 
 export function featureNames(frames: JSONMap[]): string[] {
   return classifyRound(frames).map((item) => item.name);
+}
+
+export function includeObservedFeatures(inventory: FeatureInventory, frames: JSONMap[]): boolean {
+  const observed = featureNames(frames);
+  const added = observed.filter(name => !inventory.observed.includes(name));
+  if (!added.length) return false;
+  inventory.observed = [...new Set([...inventory.observed, ...observed])].sort();
+  inventory.required = [...new Set([...inventory.required, ...observed.filter(name => name !== "bonus-buy")])].sort();
+  return true;
 }
 
 export function discoverFeatureInventory(capabilities: GameCapabilities, start: JSONMap, clientTexts = ""): FeatureInventory {

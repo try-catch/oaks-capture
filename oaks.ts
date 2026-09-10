@@ -10,7 +10,7 @@ import type { RegistryGame } from "./src/catalog";
 import { coverageComplete, remainingTargets, writeCheckpoint } from "./src/capture-checkpoint";
 import { CaptureThrottle } from "./src/capture-throttle";
 import { numberOption, selectGames, stringOption } from "./src/cli";
-import { classifyRound, discoverFeatureInventory, FeatureInventory } from "./src/features";
+import { classifyRound, discoverFeatureInventory, FeatureInventory, includeObservedFeatures } from "./src/features";
 import { discoverGame } from "./src/game-definition";
 import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, upsertMongoRound } from "./src/mongo-store";
 import { actionFeatureKey, actionSpinType, command, JSONMap, nextAction, openSession, protocolAction, ProtocolHttpError, roundSpinType, Session } from "./src/protocol";
@@ -241,6 +241,9 @@ export async function captureGame(
   let session = captureRuntime?.pending()?.session ?? await openSessionWithRetry(game, definition, throttle);
   await fs.writeFile(path.join(outputDir, "start-template.json"), `${JSON.stringify(sanitizeProtocolData(session.start), null, 2)}\n`);
   const inventory = await loadInventory(game, session, outputDir);
+  let recoveredFeatures = false;
+  for (const document of priorDocuments) recoveredFeatures = includeObservedFeatures(inventory, document.data) || recoveredFeatures;
+  if (recoveredFeatures) await fs.writeFile(path.join(outputDir, "feature-inventory.json"), JSON.stringify(inventory));
   captureRuntime?.syncFiles();
   const required = [...new Set(["base-loss", "base-or-feature-win", ...(explicitRequired.length ? explicitRequired : inventory.required)])].sort();
   const checkpointPath = path.join(outputDir, isDefaultOutput ? "capture-checkpoint.json" : `${outputBase}-checkpoint.json`);
@@ -261,6 +264,11 @@ export async function captureGame(
       attempted++;
       const frames = sanitizeProtocolData(rawFrames) as JSONMap[];
       const validation = validateGameRound(game, frames, session.defaultBet);
+      if (includeObservedFeatures(inventory, frames)) {
+        for (const feature of inventory.required) if (!required.includes(feature)) required.push(feature);
+        await fs.writeFile(path.join(outputDir, "feature-inventory.json"), JSON.stringify(inventory));
+        captureRuntime?.syncFiles();
+      }
       const features = new Set(validation.features);
       for (const evidence of classifyRound(frames)) features.add(evidence.name);
       const directed = targetFeature(action);

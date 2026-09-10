@@ -1,0 +1,46 @@
+{
+  "name": "capture-oaks",
+  "version": "1.0.0",
+  "private": true,
+  "description": "3 OAKS 批量协议数据和静态资源采集工具",
+  "scripts": {
+    "capture": "ts-node oaks.ts",
+    "capture:test": "ts-node oaks.ts --rounds 300",
+    "seed-local": "ts-node seed-local.ts",
+    "repair-seed": "ts-node repair-seed.ts",
+    "sanitize-output": "ts-node sanitize-output.ts",
+    "validate-data": "ts-node validate-data.ts",
+    "features": "ts-node validate-data.ts",
+    "feature-list": "ts-node feature-tool.ts",
+    "export-seed": "ts-node export-seed.ts",
+    "merge-special": "ts-node merge-special.ts",
+    "audit-local": "ts-node audit-local.ts",
+    "download-static": "ts-node download-static.ts",
+    "capture-network": "ts-node capture-network.ts",
+    "audit-resources": "ts-node audit-resources.ts",
+    "discover-features": "ts-node discover-features.ts",
+    "generate-platform": "ts-node generate-platform.ts",
+    "generate-docker": "ts-node generate-docker.ts",
+    "import-mongo": "ts-node import-mongo.ts",
+    "audit-mongo": "ts-node audit-mongo.ts",
+    "audit-local-all": "ts-node audit-local-all.ts",
+    "finalize-data": "ts-node finalize-data.ts",
+    "deploy-batches": "ts-node deploy-batches.ts",
+    "audit-test": "ts-node audit-test.ts",
+    "catalog:sync": "ts-node catalog-sync.ts",
+    "discover": "ts-node discover-games.ts",
+    "batch": "ts-node batch.ts",
+    "status": "ts-node status.ts",
+    "check": "tsc --noEmit",
+    "test": "node --test -r ts-node/register test/*.test.ts"
+  },
+  "dependencies": {
+    "mongodb": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "playwright": "^1.63.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}

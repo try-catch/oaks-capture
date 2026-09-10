@@ -1,0 +1,99 @@
+name: 3 OAKS durable capture
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: check 只验证部署通道；capture 执行真实采集
+        type: choice
+        options: [check, capture]
+        default: check
+  schedule:
+    - cron: '17 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oaks-official-single-queue
+  cancel-in-progress: false
+
+env:
+  OAKS_SSH_KEY: ${{ secrets.OAKS_SSH_KEY }}
+  OAKS_KNOWN_HOSTS: ${{ secrets.OAKS_KNOWN_HOSTS }}
+  OAKS_SSH_HOST: ${{ secrets.OAKS_SSH_HOST }}
+  OAKS_MONGO_HOST: ${{ secrets.OAKS_MONGO_HOST }}
+  OAKS_MONGO_URI: ${{ secrets.OAKS_MONGO_URI }}
+
+jobs:
+  prepare:
+    if: github.repository == 'try-catch/oaks-capture' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      capture: ${{ steps.mode.outputs.capture }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run check
+      - run: python3 -m unittest discover -s actions -p 'test_*.py'
+      - run: python3 actions/setup-ssh.py
+      - run: node -r ts-node/register actions/worker.ts check
+      - id: mode
+        env:
+          REQUESTED_MODE: ${{ inputs.mode }}
+          CAPTURE_ENABLED: ${{ vars.CAPTURE_ENABLED }}
+        run: |
+          if [[ "$CAPTURE_ENABLED" == true && ( "$GITHUB_EVENT_NAME" == schedule || "$REQUESTED_MODE" == capture ) ]]; then
+            node -r ts-node/register actions/worker.ts begin
+            echo 'capture=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'capture=false' >> "$GITHUB_OUTPUT"
+          fi
+  capture:
+    needs: prepare
+    if: needs.prepare.outputs.capture == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        worker: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    env:
+      OAKS_WORKER: ${{ matrix.worker }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: python3 actions/setup-ssh.py
+      - name: Confirm GitHub-hosted Linux execution
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = Linux
+          echo "GitHub run $GITHUB_RUN_ID / $RUNNER_ENVIRONMENT / $RUNNER_OS / $RUNNER_ARCH"
+      - run: node -r ts-node/register actions/worker.ts capture
+  finish:
+    needs: [prepare, capture]
+    if: always() && needs.prepare.outputs.capture == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: python3 actions/setup-ssh.py
+      - run: node -r ts-node/register actions/worker.ts end

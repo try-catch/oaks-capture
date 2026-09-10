@@ -1,0 +1,7 @@
+node_modules/
+output/
+seed-data/
+.env*
+*.pem
+*.key
+__pycache__/

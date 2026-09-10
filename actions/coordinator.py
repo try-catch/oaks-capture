@@ -97,13 +97,13 @@ class Store:
             if cursor in games:
                 at = games.index(cursor)
                 games = games[at:] + games[:at]
-            state.update(owner=run, deadline=now + 40 * 60_000, claims={}, games=games)
+            state.update(owner=run, deadline=now + 40 * 60_000, claims={}, games=games, waiters=[])
             return {'deadline': state['deadline'], 'until': state['until'], 'games': len(games)}
         if state['owner'] != run:
             raise ValueError('跨环境队列锁不属于当前运行')
         if op == 'end':
             # 仅在 Actions 的所有 worker 已结束后调用。未确认的请求仍保留在日志中，禁止盲目重放。
-            state.update(owner=None, permit=None)
+            state.update(owner=None, permit=None, waiters=[])
             return {'released': True, 'claims': state.get('claims', {})}
         if op == 'claim':
             if now >= state['deadline'] or state['until'] >= state['deadline']:
@@ -190,17 +190,28 @@ class Store:
                 return {'stop': True}
             if now < state['until']:
                 return {'stop': True, 'until': state['until']}
+            # FIFO 防止网络更快的节点反复抢占；只清理未获准请求的失联等待项。
+            waiters = [item for item in state.get('waiters', []) if now - item['seen'] < 60_000]
+            current = next((item for item in waiters if item['key'] == key), None)
+            if current is None:
+                current = {'key': key, 'seen': now}
+                waiters.append(current)
+            current['seen'] = now
+            state['waiters'] = waiters
             if state['permit']:
                 if now - state['permit']['at'] > 90_000:
                     raise ValueError('请求锁失去响应，禁止自动抢锁')
                 return {'wait': 1000}
             if now < state['next']:
                 return {'wait': state['next'] - now}
+            if waiters[0]['key'] != key:
+                return {'wait': 1000}
             if check_legacy:
                 old = subprocess.check_output(['docker', 'inspect', '--format', '{{.State.Running}}', 'oaks-capture'], text=True).strip()
                 if old != 'false':
                     raise ValueError('检测到旧采集容器运行，拒绝官方请求')
             state['permit'] = {'key': key, 'slug': slug, 'worker': worker, 'at': now}
+            waiters.pop(0)
             if previous:
                 atomic(private / (key + '-' + str(int(now)) + '-history.json'), previous)
             atomic(journal, {'request': req['request'], 'at': now, 'run': run, 'runner': req.get('runner', {})})

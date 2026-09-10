@@ -80,6 +80,25 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(json.JSONDecodeError):
             self.call('status')
 
+    def test_fifo_prevents_fast_worker_starvation_and_expires_only_waiters(self):
+        self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)
+        second = dict(op='permit', run='100-1', worker='2', slug='two', key='b' * 64, request={})
+        self.call('permit', key=self.key, request={})
+        self.assertIn('wait', self.store.call(second, check_legacy=False))
+        self.call('response', key=self.key, response={'status': 200, 'headers': {}, 'body': ''})
+        state = read(self.store.state_path)
+        state['next'] = 0
+        atomic(self.store.state_path, state)
+        self.assertIn('wait', self.call('permit', key='c' * 64, request={}))
+        self.assertTrue(self.store.call(second, check_legacy=False)['granted'])
+        state = read(self.store.state_path)
+        state['waiters'][0]['seen'] = 0
+        atomic(self.store.state_path, state)
+        self.assertIn('wait', self.call('permit', key='d' * 64, request={}))
+        state = read(self.store.state_path)
+        self.assertEqual(state['permit']['key'], 'b' * 64)
+        self.assertEqual([item['key'] for item in state['waiters']], ['d' * 64])
+
     def test_short_cooldown_waits_without_assigning_games(self):
         state = read(self.store.state_path)
         state['until'] = time.time() * 1000 + 60_000

@@ -90,8 +90,10 @@ class Store:
             state.update(owner=None, permit=None)
             return {'released': True, 'claims': state.get('claims', {})}
         if op == 'claim':
-            if now >= state['deadline'] or now < state['until']:
+            if now >= state['deadline'] or state['until'] >= state['deadline']:
                 return {'stop': True, 'until': state['until']}
+            if now < state['until']:
+                return {'wait': min(30_000, state['until'] - now), 'deadline': state['deadline']}
             for slug in state['games']:
                 if slug in state['claims']:
                     continue
@@ -102,7 +104,7 @@ class Store:
                 if manifest.get('complete') is True and audit.get('valid') is True and validation.get('invalid') == 0 and not validation.get('missing', ['unknown']):
                     state['claims'][slug] = {'status': 'already-accepted'}
                     continue
-                state['claims'][slug] = {'worker': worker, 'status': 'running'}
+                state['claims'][slug] = {'worker': worker, 'status': 'running', 'runner': req.get('runner', {})}
                 state['cursor'] = state['games'][(state['games'].index(slug) + 1) % len(state['games'])]
                 return {'slug': slug, 'deadline': state['deadline']}
             return {'stop': True}
@@ -185,7 +187,7 @@ class Store:
             state['permit'] = {'key': key, 'slug': slug, 'worker': worker, 'at': now}
             if previous:
                 atomic(private / (key + '-' + str(int(now)) + '-history.json'), previous)
-            atomic(journal, {'request': req['request'], 'at': now, 'run': run})
+            atomic(journal, {'request': req['request'], 'at': now, 'run': run, 'runner': req.get('runner', {})})
             return {'granted': True}
         if op == 'response':
             permit = state.get('permit') or {}

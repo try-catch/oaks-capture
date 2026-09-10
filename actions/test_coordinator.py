@@ -79,6 +79,13 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(json.JSONDecodeError):
             self.call('status')
 
+    def test_short_cooldown_waits_without_assigning_games(self):
+        state = read(self.store.state_path)
+        state['until'] = time.time() * 1000 + 60_000
+        atomic(self.store.state_path, state)
+        self.assertGreater(self.call('claim')['wait'], 0)
+        self.assertEqual(len(self.call('status')['claims']), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

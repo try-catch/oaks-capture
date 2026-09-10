@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { isIP } from 'node:net';
 import { spawnSync } from 'node:child_process';
 import { installCaptureRuntime, PendingRound } from '../src/capture-runtime';
 
@@ -12,13 +13,14 @@ let pending: PendingRound | undefined;
 let requestKey: string | undefined;
 let deadline = 0;
 let stopping = false;
+let egress = '';
 process.on('SIGTERM', () => { stopping = true; });
 process.on('SIGINT', () => { stopping = true; });
 
 function rpc(op: string, data: Record<string, unknown> = {}): any {
   const result = spawnSync('ssh', ['-F', process.env.OAKS_SSH_CONFIG!, 'oaks-store',
     'sudo python3 /api/api_new/tools/capture-oaks/actions/coordinator.py'], {
-    input: JSON.stringify({ op, run, worker, slug, ...data }), encoding: 'utf8', maxBuffer: 128 * 1024 * 1024, timeout: 45_000,
+    input: JSON.stringify({ op, run, worker, slug, runner: { name: process.env.RUNNER_NAME, environment: process.env.RUNNER_ENVIRONMENT, egress }, ...data }), encoding: 'utf8', maxBuffer: 128 * 1024 * 1024, timeout: 45_000,
   });
   if (result.error) throw new Error('测试服持久化通道不可用');
   let response: any;
@@ -96,6 +98,13 @@ async function main(): Promise<void> {
     return;
   }
   if (mode !== 'capture') throw new Error('未知执行模式');
+  if (['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'].some(key => process.env[key])) {
+    throw new Error('采集 Runner 不允许配置出口代理');
+  }
+  const address = await fetch('https://api.ipify.org', { signal: AbortSignal.timeout(10_000) }).then(response => response.text());
+  if (!isIP(address.trim())) throw new Error('无法核实 Runner 出口');
+  egress = address.trim();
+  console.log(JSON.stringify({ worker, runnerEnvironment: process.env.RUNNER_ENVIRONMENT, egress }));
   if (!process.env.OAKS_MONGO_URI) throw new Error('缺少受控 Mongo 连接');
   process.env.OAKS_TEST_MONGO_URI = process.env.OAKS_MONGO_URI;
   process.argv = [process.execPath, __filename, '--rounds', '500', '--target-per-feature', '10'];
@@ -106,6 +115,10 @@ async function main(): Promise<void> {
   while (!stopping) {
     const claimed = rpc('claim');
     if (claimed.stop) break;
+    if (claimed.wait) {
+      await new Promise(resolve => setTimeout(resolve, claimed.wait));
+      continue;
+    }
     slug = claimed.slug;
     deadline = claimed.deadline;
     const game = registry.games.find(game => game.slug === slug);

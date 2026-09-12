@@ -9,7 +9,7 @@ on:
         options: [check, capture]
         default: check
   schedule:
-    - cron: '17 * * * *'
+    - cron: '*/20 * * * *'
 
 permissions:
   contents: read
@@ -26,12 +26,19 @@ env:
   OAKS_MONGO_HOST: ${{ secrets.OAKS_MONGO_HOST }}
   OAKS_MONGO_URI: ${{ secrets.OAKS_MONGO_URI }}
   OAKS_PROVIDER_AUTHORIZED: ${{ secrets.OAKS_PROVIDER_AUTHORIZED }}
+  # 单节点线程数、节点数、请求间隔必须与服务商书面授权允许的并发一致。
+  OAKS_THREADS: '8'
+  OAKS_NODES: '20'
+  OAKS_NODE_SPACING_MS: '250'
+  OAKS_THROTTLE_LIMIT: '6'
+  OAKS_DEADLINE_MINUTES: '45'
+  OAKS_SPIN_DELAY_MS: '2000'
 
 jobs:
   prepare:
     if: github.repository == 'try-catch/oaks-capture' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     outputs:
       capture: ${{ steps.mode.outputs.capture }}
     steps:
@@ -62,7 +69,7 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.capture == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       max-parallel: 20

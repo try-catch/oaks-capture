@@ -13,6 +13,47 @@ import time
 import urllib.request
 
 
+# 节点内每个官方请求的最小间隔。线程自身的节奏由客户端 SPIN_DELAY_MS 控制，
+# 这里只保证同一出口不会在极短时间内连打。
+DEFAULT_NODE_SPACING_MS = 250
+# 单个节点内触发过官方限速的线程数超过该值时，判定该出口已被封控并熔断换节点。
+DEFAULT_THROTTLE_LIMIT = 6
+# 两个以上节点在同一窗口内都被限速，判定为服务商整体限速，改为全局暂停。
+GLOBAL_LIMIT_NODES = 2
+GLOBAL_LIMIT_WINDOW_MS = 120_000
+# 429 未给出 Retry-After 时的保守等待。
+CONSERVATIVE_WAIT_MS = 60_000
+# 线程身份为 <节点>.<线程>，节点身份用于出口熔断，线程身份用于游戏租约。
+THREAD_ID = re.compile(r'([0-9]+)\.([0-9]+)')
+
+
+def node_of(worker):
+    match = THREAD_ID.fullmatch(worker)
+    return match.group(1) if match else worker
+
+
+def positive_int(value, fallback):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return number if number > 0 else fallback
+
+
+def retry_after_ms(headers, now):
+    """官方限速等待：优先 Retry-After，无法解析时保守等待。"""
+    value = (headers or {}).get('retry-after', '')
+    try:
+        return float(value) * 1000
+    except (TypeError, ValueError):
+        pass
+    from email.utils import parsedate_to_datetime
+    try:
+        return parsedate_to_datetime(value).timestamp() * 1000 - now
+    except (ValueError, TypeError):
+        return CONSERVATIVE_WAIT_MS
+
+
 def completed_attempt(run, token):
     if not token or not re.fullmatch(r'[0-9]+-[0-9]+', run):
         return False
@@ -66,13 +107,33 @@ class Store:
             atomic(self.state_path, state)
             return result
 
+    def release_node(self, state, node):
+        """熔断节点：交回它未完成的租约，让其它节点立刻接手同一批游戏。
+
+        同时清空 worker，使被熔断线程后续的落盘和确认都会被拒绝，避免两个节点同时写同一个游戏。
+        """
+        for claim in state.get('claims', {}).values():
+            if claim.get('status') == 'running' and node_of(str(claim.get('worker', ''))) == node:
+                claim['status'] = 'released'
+                claim['worker'] = ''
+
     def execute(self, state, req, check_legacy):
         op = req['op']
         now = time.time() * 1000
         run = str(req.get('run', ''))
         worker = str(req.get('worker', ''))
+        node = str(req.get('node') or node_of(worker))
+        state.setdefault('permits', {})
+        state.setdefault('nodeUntil', {})
+        state.setdefault('nodeThrottle', {})
+        state.setdefault('halted', {})
+        state.setdefault('rateNodes', [])
+        # begin 总会重写 topology；这里给旧状态一个保守占位，避免升级期间放大并发。
+        state.setdefault('topology', {'nodeMs': DEFAULT_NODE_SPACING_MS, 'throttleLimit': DEFAULT_THROTTLE_LIMIT,
+                                      'maxInFlight': 1, 'maxClaims': 6})
         if op == 'status':
-            return {key: state.get(key) for key in ('owner', 'until', 'next', 'claims', 'deadline')}
+            return {key: state.get(key) for key in ('owner', 'until', 'next', 'claims', 'deadline', 'halted', 'topology')} | {
+                'permits': len(state['permits']), 'nodeUntil': state['nodeUntil']}
         if not re.fullmatch(r'[0-9]+-[0-9]+', run):
             raise ValueError('非法运行标识')
         if op == 'begin':
@@ -84,37 +145,54 @@ class Store:
                 if not completed_attempt(state['owner'], req.get('githubToken', '')):
                     raise ValueError('存在未释放的跨环境队列锁，需要核实旧 Actions 运行状态')
                 # 仅在 GitHub 证明旧 attempt 已结束后回收队列所有权；未知请求日志仍禁止重放。
-                state.update(owner=None, permit=None)
+                state.update(owner=None, permit=None, permits={})
             handoff = read(self.root / 'output' / 'actions-handoff.json', {})
             if handoff.get('migrationState') != 'stopped':
                 raise ValueError('缺少已停止的交接证明')
             until = dt.datetime.fromisoformat(handoff['retryNotBefore']).timestamp() * 1000
+            # 只继承交接时记录的冷却截止时间，不再强制放慢此后的节点间隔。
             state['until'] = max(state['until'], until)
-            state['rateCount'] = max(state['rateCount'], 2)
             registry = read(self.root / 'games' / 'registry.json')
             games = [game['slug'] for game in registry['games'] if game.get('active', True)]
             cursor = state.get('cursor', handoff.get('slug'))
             if cursor in games:
                 at = games.index(cursor)
                 games = games[at:] + games[:at]
-            state.update(owner=run, deadline=now + 40 * 60_000, claims={}, games=games, waiters=[])
-            return {'deadline': state['deadline'], 'until': state['until'], 'games': len(games)}
+            threads = positive_int(req.get('threads'), 1)
+            nodes = positive_int(req.get('nodes'), 1)
+            topology = {
+                'threads': threads,
+                'nodes': nodes,
+                'nodeMs': positive_int(req.get('nodeMs'), DEFAULT_NODE_SPACING_MS),
+                'throttleLimit': positive_int(req.get('throttleLimit'), DEFAULT_THROTTLE_LIMIT),
+                'maxInFlight': positive_int(req.get('maxInFlight'), threads * nodes),
+                # 未显式给出时保留历史上的 6 个并发游戏会话上限。
+                'maxClaims': positive_int(req.get('maxClaims'), 6),
+                'deadline': now + positive_int(req.get('deadlineMinutes'), 40) * 60_000,
+            }
+            state.update(owner=run, deadline=topology['deadline'], claims={}, games=games, waiters=[],
+                         permits={}, nodeUntil={}, nodeThrottle={}, halted={}, rateNodes=[], topology=topology)
+            return {'deadline': state['deadline'], 'until': state['until'], 'games': len(games), 'topology': topology}
         if state['owner'] != run:
             raise ValueError('跨环境队列锁不属于当前运行')
         if op == 'end':
             # 仅在 Actions 的所有 worker 已结束后调用。未确认的请求仍保留在日志中，禁止盲目重放。
-            state.update(owner=None, permit=None, waiters=[])
-            return {'released': True, 'claims': state.get('claims', {})}
+            state.update(owner=None, permit=None, permits={}, waiters=[])
+            return {'released': True, 'claims': state.get('claims', {}), 'halted': state.get('halted', {})}
+        if op in ('claim', 'permit') and node in state['halted']:
+            # 该出口已被熔断：立刻停机并保留已落盘数据，由新节点接手续采。
+            # 必须早于租约校验，否则被交回租约的线程只会看到普通错误。
+            return {'stop': True, 'halted': True}
         if op == 'claim':
-            if now >= state['deadline'] or state['until'] >= state['deadline']:
-                return {'stop': True, 'until': state['until']}
+            if now >= state['deadline'] or state['until'] >= state['deadline']:                return {'stop': True, 'until': state['until']}
             if now < state['until']:
                 return {'wait': min(30_000, state['until'] - now), 'deadline': state['deadline']}
-            # 已观测到间隔 61–62 秒的会话返回 GAME_REOPENED；为共享节流保留余量。
-            if sum(claim.get('status') == 'running' for claim in state['claims'].values()) >= 6:
+            if sum(claim.get('status') == 'running' for claim in state['claims'].values()) >= state['topology']['maxClaims']:
                 return {'wait': 3000, 'deadline': state['deadline']}
             for slug in state['games']:
-                if slug in state['claims']:
+                claim = state['claims'].get(slug)
+                # 熔断节点释放出的游戏立刻可以重新认领；其余已认领游戏在本轮内不重复认领。
+                if slug in state['claims'] and claim.get('status') != 'released':
                     continue
                 folder = self.root / 'output' / slug
                 manifest = read(folder / 'data-manifest.json', {})
@@ -123,7 +201,7 @@ class Store:
                 if manifest.get('complete') is True and audit.get('valid') is True and validation.get('invalid') == 0 and not validation.get('missing', ['unknown']):
                     state['claims'][slug] = {'status': 'already-accepted'}
                     continue
-                state['claims'][slug] = {'worker': worker, 'status': 'running', 'runner': req.get('runner', {})}
+                state['claims'][slug] = {'worker': worker, 'status': 'running', 'node': node, 'runner': req.get('runner', {})}
                 state['cursor'] = state['games'][(state['games'].index(slug) + 1) % len(state['games'])]
                 return {'slug': slug, 'deadline': state['deadline']}
             return {'stop': True}
@@ -197,50 +275,54 @@ class Store:
             waiters = [item for item in state.get('waiters', []) if now - item['seen'] < 60_000]
             current = next((item for item in waiters if item['key'] == key), None)
             if current is None:
-                current = {'key': key, 'seen': now}
+                current = {'key': key, 'node': node, 'seen': now}
                 waiters.append(current)
             current['seen'] = now
             state['waiters'] = waiters
-            if state['permit']:
-                if now - state['permit']['at'] > 90_000:
-                    raise ValueError('请求锁失去响应，禁止自动抢锁')
+            # 等待节点自身间隔的请求不占用队首，避免一个正在退避的出口拖慢其它出口。
+            eligible = [item for item in waiters if now >= state['nodeUntil'].get(item.get('node', ''), 0)]
+            if len(state['permits']) >= state['topology']['maxInFlight']:
                 return {'wait': 1000}
-            if now < state['next']:
-                return {'wait': state['next'] - now}
-            if waiters[0]['key'] != key:
+            if not eligible or eligible[0]['key'] != key:
                 return {'wait': 1000}
             if check_legacy:
                 old = subprocess.check_output(['docker', 'inspect', '--format', '{{.State.Running}}', 'oaks-capture'], text=True).strip()
                 if old != 'false':
                     raise ValueError('检测到旧采集容器运行，拒绝官方请求')
-            state['permit'] = {'key': key, 'slug': slug, 'worker': worker, 'at': now}
-            waiters.pop(0)
+            state['permits'][key] = {'key': key, 'slug': slug, 'worker': worker, 'node': node, 'at': now}
+            waiters.remove(current)
+            state['nodeUntil'][node] = max(state['nodeUntil'].get(node, 0), now + state['topology']['nodeMs'])
             if previous:
                 atomic(private / (key + '-' + str(int(now)) + '-history.json'), previous)
             atomic(journal, {'request': req['request'], 'at': now, 'run': run, 'runner': req.get('runner', {})})
             return {'granted': True}
         if op == 'response':
-            permit = state.get('permit') or {}
-            if (permit.get('key'), permit.get('slug'), permit.get('worker')) != (key, slug, worker):
+            permit = state['permits'].get(key)
+            if not permit or (permit.get('slug'), permit.get('worker')) != (slug, worker):
                 raise ValueError('响应不匹配当前请求锁')
+            del state['permits'][key]
             entry = read(journal)
             entry['response'] = req['response']
             atomic(journal, entry)
             if req['response']['status'] == 429:
                 state['rateCount'] += 1
-                retry = req['response']['headers'].get('retry-after', '')
-                try:
-                    delay = float(retry) * 1000
-                except ValueError:
-                    from email.utils import parsedate_to_datetime
-                    try:
-                        delay = parsedate_to_datetime(retry).timestamp() * 1000 - now
-                    except (ValueError, TypeError):
-                        delay = 60_000
-                state['until'] = max(state['until'], now + max(10_000, delay))
-            state['next'] = now + (5000 if state['rateCount'] >= 2 else 3000)
-            state['permit'] = None
-            return {'until': state['until']}
+                wait = max(10_000, retry_after_ms(req['response'].get('headers'), now))
+                # 该出口立即退避并遵守 Retry-After。
+                state['nodeUntil'][node] = max(state['nodeUntil'].get(node, 0), now + wait)
+                threads = state['nodeThrottle'].setdefault(node, [])
+                if worker not in threads:
+                    threads.append(worker)
+                window = [item for item in state['rateNodes'] if now - item['at'] < GLOBAL_LIMIT_WINDOW_MS]
+                window.append({'node': node, 'at': now})
+                state['rateNodes'] = window
+                if len({item['node'] for item in window}) >= GLOBAL_LIMIT_NODES:
+                    # 多个出口同时被限速说明是服务商整体的限制，所有节点一起等。
+                    state['until'] = max(state['until'], now + wait)
+                if len(threads) > state['topology']['throttleLimit']:
+                    # 单节点内太多线程被限速：熔断该出口，保留数据并让新节点接续。
+                    state['halted'][node] = now
+                    self.release_node(state, node)
+            return {'until': state['until'], 'nodeUntil': state['nodeUntil'].get(node, 0), 'halted': node in state['halted']}
         raise ValueError('未知协调操作')
 
 

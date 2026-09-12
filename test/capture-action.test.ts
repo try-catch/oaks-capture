@@ -49,7 +49,7 @@ test("协议限流完整遵守 Retry-After，普通错误按指数退避", () =>
   assert.equal(retryDelayMs(new Error("network"), 3), 8_000);
 });
 
-test("默认采集节奏为三秒且游戏切换等待十秒", () => {
-  assert.equal(SPIN_DELAY_MS, 3_000);
+test("默认采集节奏为两秒且游戏切换等待十秒", () => {
+  assert.equal(SPIN_DELAY_MS, 2_000);
   assert.equal(GAME_SWITCH_DELAY_MS, 10_000);
 });

@@ -7,7 +7,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
-from coordinator import Store, atomic, read
+from coordinator import CONSERVATIVE_WAIT_MS, Store, atomic, node_of, read, retry_after_ms
 
 
 class RecoveryTests(unittest.TestCase):
@@ -26,6 +26,23 @@ class RecoveryTests(unittest.TestCase):
 
     def call(self, op, **kwargs):
         return self.store.call(dict(op=op, run='100-1', worker='1', slug='one', **kwargs), check_legacy=False)
+
+    def permit(self, worker, slug, key):
+        return self.store.call(dict(op='permit', run='100-1', worker=worker, slug=slug, key=key, request={}), check_legacy=False)
+
+    def throttle(self, worker, slug, key, retry='3600'):
+        self.permit(worker, slug, key)
+        return self.store.call(dict(op='response', run='100-1', worker=worker, slug=slug, key=key,
+                                    response={'status': 429, 'headers': {'retry-after': retry}, 'body': ''}), check_legacy=False)
+
+    def expand_registry(self, count):
+        atomic(self.root / 'games/registry.json', {'games': [{'slug': f'g{number}'} for number in range(count)]})
+
+    def clear_node_backoff(self):
+        """模拟请求在限速生效前就已并发发出：清掉节点间隔，便于观察熔断计数。"""
+        state = read(self.store.state_path)
+        state['nodeUntil'] = {}
+        atomic(self.store.state_path, state)
 
     def test_cross_run_and_worker_exclusion(self):
         with self.assertRaises(ValueError):
@@ -56,21 +73,83 @@ class RecoveryTests(unittest.TestCase):
         self.call('response', key=self.key, response=response)
         self.assertEqual(self.call('permit', key=self.key, request={})['cached'], response)
 
-    def test_429_persists_and_pauses_all_workers_across_runs(self):
-        self.call('permit', key=self.key, request={})
+    def test_single_node_throttle_backs_off_only_that_node(self):
+        self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)
         before = time.time() * 1000
-        self.call('response', key=self.key, response={'status': 429, 'headers': {'retry-after': '3600'}, 'body': ''})
+        settled = self.throttle('1', 'one', self.key)
+        # 单个出口被限速只退避它自己，不冻结其它出口。
+        self.assertLess(settled['until'], before)
+        self.assertGreaterEqual(settled['nodeUntil'], before + 3_600_000)
+        self.assertLess(self.call('status')['until'], before)
+        state = read(self.store.state_path)
+        state['nodeUntil']['1'] = time.time() * 1000 + 60_000
+        atomic(self.store.state_path, state)
+        self.assertIn('wait', self.call('permit', key='a' * 64, request={}))
+        self.assertTrue(self.permit('2', 'two', 'b' * 64)['granted'])
+
+    def test_two_node_throttle_pauses_all_workers_across_runs(self):
+        self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)
+        self.throttle('1', 'one', self.key)
+        before = time.time() * 1000
+        self.throttle('2', 'two', 'b' * 64)
+        # 多个出口同时被限速说明是服务商整体限制，全局暂停并跨运行保留。
         self.assertGreaterEqual(self.call('status')['until'], before + 3_600_000)
         self.assertTrue(self.call('claim')['stop'])
         self.call('end')
         self.call('begin')
         self.assertTrue(self.call('claim')['stop'])
 
-    def test_global_request_interval_and_reject_report_path_escape(self):
+    def test_node_circuit_breaker_halts_and_lets_another_node_continue(self):
+        self.expand_registry(12)
+        self.call('end')
+        self.call('begin', threads=8, nodes=2, maxInFlight=16, maxClaims=16, throttleLimit=6)
+        claimed = []
+        for number in range(7):
+            worker = f'1.{number}'
+            slug = self.store.call({'op': 'claim', 'run': '100-1', 'worker': worker}, check_legacy=False)['slug']
+            key = hashlib.sha256(worker.encode()).hexdigest()
+            self.clear_node_backoff()
+            self.throttle(worker, slug, key)
+            claimed.append((worker, slug, key))
+        state = read(self.store.state_path)
+        # 超过 6 个线程被限速即熔断该节点，并交回未完成的租约。
+        self.assertIn('1', state['halted'])
+        self.assertEqual(len(state['nodeThrottle']['1']), 7)
+        self.assertEqual(state['claims'][claimed[0][1]]['status'], 'released')
+        self.assertEqual(state['claims'][claimed[0][1]]['worker'], '')
+        # 熔断后的节点立刻停机，且不能再写已交回的游戏。
+        self.assertTrue(self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.7'}, check_legacy=False)['stop'])
+        self.assertTrue(self.permit('1.7', claimed[0][1], 'c' * 64)['halted'])
+        with self.assertRaises(ValueError):
+            self.store.call({'op': 'load', 'run': '100-1', 'worker': claimed[0][0], 'slug': claimed[0][1]}, check_legacy=False)
+        # 其它节点可以接手被交回的游戏。
+        taken = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2.0'}, check_legacy=False)
+        self.assertEqual(taken['slug'], claimed[0][1])
+        self.assertEqual(read(self.store.state_path)['claims'][taken['slug']]['worker'], '2.0')
+
+    def test_topology_sets_concurrency_budget(self):
+        self.expand_registry(4)
+        self.call('end')
+        started = self.call('begin', threads=8, nodes=20, maxInFlight=160, maxClaims=160, nodeMs=500, throttleLimit=7)
+        self.assertEqual(started['topology']['maxInFlight'], 160)
+        self.assertEqual(started['topology']['throttleLimit'], 7)
+        self.assertEqual(self.call('status')['topology']['nodes'], 20)
+        # 授权并发内的多个出口可以同时持有请求许可。
+        for number in range(3):
+            slug = self.store.call({'op': 'claim', 'run': '100-1', 'worker': f'1.{number}'}, check_legacy=False)['slug']
+            self.clear_node_backoff()
+            self.assertTrue(self.permit(f'1.{number}', slug, hashlib.sha256(str(number).encode()).hexdigest())['granted'])
+        self.assertEqual(self.call('status')['permits'], 3)
+
+    def test_per_node_request_interval_and_reject_report_path_escape(self):
         self.call('permit', key=self.key, request={})
         other = hashlib.sha256(b'other').hexdigest()
         self.assertEqual(self.call('permit', key=other, request={})['wait'], 1000)
         self.call('response', key=self.key, response={'status': 200, 'headers': {}, 'body': ''})
+        state = read(self.store.state_path)
+        state['nodeUntil']['1'] = time.time() * 1000 + 60_000
+        atomic(self.store.state_path, state)
+        # 同一出口在节点间隔内不得再次请求。
         self.assertGreater(self.call('permit', key=other, request={})['wait'], 0)
         with self.assertRaises(ValueError):
             self.call('files', files={'../../escape': '{}'})
@@ -97,7 +176,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn('wait', self.store.call(second, check_legacy=False))
         self.call('response', key=self.key, response={'status': 200, 'headers': {}, 'body': ''})
         state = read(self.store.state_path)
-        state['next'] = 0
+        state['nodeUntil'] = {}
         atomic(self.store.state_path, state)
         self.assertIn('wait', self.call('permit', key='c' * 64, request={}))
         self.assertTrue(self.store.call(second, check_legacy=False)['granted'])
@@ -106,7 +185,7 @@ class RecoveryTests(unittest.TestCase):
         atomic(self.store.state_path, state)
         self.assertIn('wait', self.call('permit', key='d' * 64, request={}))
         state = read(self.store.state_path)
-        self.assertEqual(state['permit']['key'], 'b' * 64)
+        self.assertEqual(list(state['permits']), ['b' * 64])
         self.assertEqual([item['key'] for item in state['waiters']], ['d' * 64])
 
     def test_short_cooldown_waits_without_assigning_games(self):
@@ -126,6 +205,17 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(read(self.store.state_path)['owner'], '200-1')
         self.assertNotIn('fixture', self.store.state_path.read_text())
         self.assertTrue((self.store.directory / 'one' / (self.key + '.json')).exists())
+
+    def test_node_identity_and_retry_after_parsing(self):
+        self.assertEqual(node_of('7.3'), '7')
+        self.assertEqual(node_of('7'), '7')
+        now = 1_700_000_000_000
+        self.assertEqual(retry_after_ms({'retry-after': '45'}, now), 45_000)
+        self.assertEqual(retry_after_ms({}, now), CONSERVATIVE_WAIT_MS)
+        self.assertEqual(retry_after_ms({'retry-after': 'invalid'}, now), CONSERVATIVE_WAIT_MS)
+        moment = dt.datetime.fromtimestamp(now / 1000, dt.timezone.utc) + dt.timedelta(seconds=90)
+        header = moment.strftime('%a, %d %b %Y %H:%M:%S GMT')
+        self.assertAlmostEqual(retry_after_ms({'retry-after': header}, now), 90_000, delta=1000)
 
 
 if __name__ == '__main__':

@@ -2,15 +2,19 @@
 
 公共仓库仅包含采集代码、测试和目录定义。NDJSON、凭据、原始响应及未完成局只保存在测试服，禁止上传 artifact。
 
-`workflow.yml` 发布为 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。先用 `workflow_dispatch / check` 验证，通过后设置仓库变量 `CAPTURE_ENABLED=true`。默认每小时第 17 分钟运行，20 个 GitHub-hosted Linux 节点从同一队列领取游戏，每款每轮最多新增 500 局，共享 40 分钟预算。
+`workflow.yml` 发布为 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。先用 `workflow_dispatch / check` 验证，通过后设置仓库变量 `CAPTURE_ENABLED=true`。默认每 20 分钟运行一次，20 个 GitHub-hosted Linux 节点各自开启 8 个采集线程，每轮共享 45 分钟预算。
 
-20 个节点不会获得 20 倍请求额度。协调器同时只允许一个官方请求，普通间隔 3 秒，重复 429 后间隔 5 秒；所有节点和后续运行共用持久化的 Retry-After 截止时间。切换游戏等待 10 秒。
+并发预算由协调器统一发放：`OAKS_THREADS × OAKS_NODES = 160` 个线程可以同时持有请求许可。每个线程独占一个游戏租约并持续恢复到配额达标或本轮预算耗尽，单次调用不再被 500 局截断。同屏线程数、节点数和请求间隔必须与服务商书面授权允许的并发一致；把 `OAKS_THREADS`、`OAKS_NODES`、`OAKS_SPIN_DELAY_MS` 调到授权上限之上属于超授权采集。
 
-每个游戏按代码中已核实的官方模式定义验收：普通模式至少 100000 条；每个购买模式和每个加注模式分别至少 10000 条。Runner 每次只处理一个游戏，不在单节点内开启 8 个采集线程。任何 429 都按官方 `Retry-After` 暂停整个队列，不能通过增加 Runner 或出口继续请求。
+官方请求的节奏分两层：线程自身的 `OAKS_SPIN_DELAY_MS`（默认 2 秒）决定单个会话的请求间隔，节点层的 `OAKS_NODE_SPACING_MS`（默认 250 毫秒）保证同一出口不会在极短时间内连打。请求许可按到达顺序发放，正在退避的出口不会占用队首拖慢其它出口。
 
-同时活跃的游戏会话最多 6 个，其余节点等待领取，不提前登录官方。已观测到请求间隔 61–62 秒时返回 `GAME_REOPENED`，因此不能让 20 个会话同时竞争共享节流。6 个是保守运行上限，不代表已确认官方超时阈值；已领取游戏结束后自动释放位置。
+限速分两种反应。单个出口被限速时，只有该出口按官方 `Retry-After` 退避，其它出口继续工作。同一窗口（120 秒）内有 2 个及以上出口都被限速，说明是服务商整体限制，所有节点一起暂停；该截止时间持久化在 `output/.actions/queue.json`，后续运行继续遵守。
 
-Secrets：`OAKS_SSH_KEY`、`OAKS_KNOWN_HOSTS`、`OAKS_SSH_HOST`、`OAKS_MONGO_HOST`、`OAKS_MONGO_URI`。Mongo URI 指向 Runner 的本地 SSH 隧道端口 27018，禁止开放数据库公网端口。SSH 主机密钥必须来自已核实的主机记录。
+单节点熔断：同一节点内触发过官方限速的线程数超过 `OAKS_THROTTLE_LIMIT`（默认 6）时，判定该出口已被封控。协调器立即熔断该节点、交回它未完成的游戏租约，被熔断线程的后续落盘和确认会被拒绝。已写入测试服的数据全部保留，交回的游戏在下一次运行由新的节点接手，不需要人工干预。
+
+每个游戏按代码中已核实的官方模式定义验收：普通模式至少 100000 条；每个购买模式和每个加注模式分别至少 10000 条。全部 107 款游戏合计约 1185 万局，在 160 线程 × 2 秒节奏下约需 2.5–3.2 天连续运行。
+
+Secrets：`OAKS_SSH_KEY`、`OAKS_KNOWN_HOSTS`、`OAKS_SSH_HOST`、`OAKS_MONGO_HOST`、`OAKS_MONGO_URI`。Mongo URI 指向 Runner 的本地 SSH 隧道端口 27018，禁止开放数据库公网端口。SSH 主机密钥必须来自已核实的主机记录。采集 Runner 禁止配置任何 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 出口代理，也不轮换账号：节点只能是 GitHub-hosted Runner。
 
 测试服先安装 `actions/coordinator.py`。旧采集容器必须停止，并存在 `output/actions-handoff.json` 交接证明。协调器每次放行官方请求前再次检查旧容器，跨运行队列所有权落盘于 `output/.actions/queue.json`。
 

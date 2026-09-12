@@ -35,9 +35,15 @@ test("单个节点按线程数并发，节点数与矩阵一致", () => {
   assert.match(worker, /fork\(__filename, \['thread'\]/);
 });
 
+test("同时活跃的官方会话数受限，不能等于线程总数", () => {
+  // 实测 107 个并发会话 → 103 个游戏立刻 GAME_REOPENED；6 个会话时成功率 97%。
+  assert.match(workflow, /OAKS_MAX_CLAIMS:\s*'6'/);
+  assert.match(worker, /maxClaims: numberFromEnv\('OAKS_MAX_CLAIMS', 6\)/);
+  assert.doesNotMatch(worker, /maxClaims: threads \* nodes/);
+});
+
 test("begin 把线程与节点拓扑交给协调器作为并发预算", () => {
   assert.match(worker, /maxInFlight:\s*threads \* nodes/);
-  assert.match(worker, /maxClaims:\s*threads \* nodes/);
   assert.match(worker, /throttleLimit:\s*numberFromEnv\('OAKS_THROTTLE_LIMIT', 6\)/);
   assert.match(coordinator, /DEFAULT_THROTTLE_LIMIT = 6/);
 });

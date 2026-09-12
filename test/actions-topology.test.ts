@@ -17,6 +17,8 @@ test("定时检查为每二十分钟一次且保留手工 check/capture 入口",
 test("单个节点按线程数并发，节点数与矩阵一致", () => {
   assert.match(workflow, /OAKS_THREADS:\s*'8'/);
   assert.match(workflow, /OAKS_NODES:\s*'20'/);
+  // 部署节奏是授权的运行参数，代码默认值保持更保守的 2 秒。
+  assert.match(workflow, /OAKS_SPIN_DELAY_MS:\s*'1500'/);
   assert.match(workflow, /max-parallel:\s*20/);
   const matrix = workflow.match(/worker:\s*\[([^\]]+)\]/)?.[1] ?? "";
   assert.equal(matrix.split(",").length, 20);

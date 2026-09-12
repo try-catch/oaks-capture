@@ -10,6 +10,11 @@ on:
         default: check
   schedule:
     - cron: '*/20 * * * *'
+  push:
+    branches: [main]
+    # 只有改动这个文件才触发采集，普通代码推送不会启动真实采集。
+    paths:
+      - 'capture-trigger.json'
 
 permissions:
   contents: read
@@ -59,7 +64,7 @@ jobs:
           REQUESTED_MODE: ${{ inputs.mode }}
           CAPTURE_ENABLED: ${{ vars.CAPTURE_ENABLED }}
         run: |
-          if [[ "$CAPTURE_ENABLED" == true && ( "$GITHUB_EVENT_NAME" == schedule || "$REQUESTED_MODE" == capture ) ]]; then
+          if [[ "$CAPTURE_ENABLED" == true && ( "$GITHUB_EVENT_NAME" == schedule || "$GITHUB_EVENT_NAME" == push || "$REQUESTED_MODE" == capture ) ]]; then
             node -r ts-node/register actions/worker.ts begin
             echo 'capture=true' >> "$GITHUB_OUTPUT"
           else
@@ -67,7 +72,10 @@ jobs:
           fi
   capture:
     needs: prepare
-    if: needs.prepare.outputs.capture == 'true'
+    # 采集门禁同时接受事件与 job 输出：只依赖 job 输出曾导致 capture 被无条件跳过。
+    if: |
+      github.event_name == 'schedule' || github.event_name == 'push'
+      || inputs.mode == 'capture' || needs.prepare.outputs.capture == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     strategy:
@@ -94,7 +102,9 @@ jobs:
       - run: node -r ts-node/register actions/worker.ts capture
   finish:
     needs: [prepare, capture]
-    if: always() && needs.prepare.outputs.capture == 'true'
+    if: |
+      always() && ( github.event_name == 'schedule' || github.event_name == 'push'
+      || inputs.mode == 'capture' || needs.prepare.outputs.capture == 'true' )
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

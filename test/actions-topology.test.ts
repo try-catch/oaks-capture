@@ -14,6 +14,15 @@ test("定时检查为每二十分钟一次且保留手工 check/capture 入口",
   assert.match(workflow, /options:\s*\[check, capture\]/);
 });
 
+test("采集门禁不依赖单个 job 输出，且推送触发只认专用文件", () => {
+  // 只依赖 prepare 的 job 输出时，capture 曾被无条件跳过（run 24/25）。
+  assert.match(workflow, /github\.event_name == 'schedule' \|\| github\.event_name == 'push'/);
+  assert.match(workflow, /inputs\.mode == 'capture' \|\| needs\.prepare\.outputs\.capture == 'true'/);
+  // 推送触发必须限定在专用文件上，普通代码推送不能启动真实采集。
+  assert.match(workflow, /paths:\s*\n\s*-\s*'capture-trigger\.json'/);
+  assert.match(workflow, /"\$GITHUB_EVENT_NAME" == push/);
+});
+
 test("单个节点按线程数并发，节点数与矩阵一致", () => {
   assert.match(workflow, /OAKS_THREADS:\s*'8'/);
   assert.match(workflow, /OAKS_NODES:\s*'20'/);

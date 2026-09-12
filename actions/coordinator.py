@@ -263,7 +263,9 @@ class Store:
         if op == 'permit':
             previous = read(journal)
             if previous:
-                if previous.get('response') and 200 <= previous['response']['status'] < 300:
+                # 只有调用方确认业务成功的响应才允许重放；官方会在 200 里返回业务失败，
+                # 重放它会让这一局永久卡死，因此旧版本没有 usable 标记的记录一律重新请求。
+                if previous.get('response') and previous.get('usable') is True and 200 <= previous['response']['status'] < 300:
                     return {'cached': previous['response']}
                 if not previous.get('response'):
                     raise ValueError('存在结果未知的官方请求，已隔离，禁止自动重放')
@@ -303,6 +305,7 @@ class Store:
             del state['permits'][key]
             entry = read(journal)
             entry['response'] = req['response']
+            entry['usable'] = bool(req.get('usable', 200 <= req['response']['status'] < 300))
             atomic(journal, entry)
             if req['response']['status'] == 429:
                 state['rateCount'] += 1

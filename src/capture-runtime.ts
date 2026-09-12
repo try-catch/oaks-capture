@@ -5,7 +5,8 @@ import type { PlayAction } from './shop';
 export interface PendingRound { id: string; session: Session; action: PlayAction; frames: JSONMap[] }
 export interface CaptureRuntime {
   pending(): PendingRound | undefined;
-  savePending(round: PendingRound): void;
+  // 传 undefined 表示丢弃无法完成的未完成局（例如会话被官方重开）。
+  savePending(round: PendingRound | undefined): void;
   requestStep(id: string, step: number): void;
   writeDocument(document: Record<string, unknown>): void;
   acknowledge(document: Record<string, unknown>): void;

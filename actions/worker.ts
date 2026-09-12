@@ -61,6 +61,23 @@ function requireGithubHosted(): void {
     throw new Error('采集 Runner 不允许配置出口代理');
   }
 }
+// 官方把业务结果放在 200 响应的 status.code 里，HTTP 状态无法区分成功与业务失败。
+function businessStatusCode(body: Buffer): string | undefined {
+  try {
+    const parsed = JSON.parse(body.toString('utf8'));
+    const code = parsed?.status?.code;
+    return typeof code === 'string' ? code : undefined;
+  } catch { return undefined; }
+}
+function usableResponse(body: Buffer): boolean {
+  const code = businessStatusCode(body);
+  return code === undefined || code === 'OK';
+}
+// 公开日志只输出可诊断的原因，去掉 URL 与响应正文，避免泄漏出口、队列令牌或官方数据。
+function reasonOf(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/https?:\/\/\S+/g, '<url>').slice(0, 200);
+}
 function installDurability(): void {
   installCaptureRuntime({
     pending: () => pending,
@@ -81,7 +98,12 @@ function installDurability(): void {
     while (true) {
       if (stopped()) throw new Error('ACTIONS_BUDGET');
       const permit = rpc('permit', { key, request });
-      if (permit.cached) return new Response(Buffer.from(permit.cached.body, 'base64'), { status: permit.cached.status, headers: permit.cached.headers });
+      if (permit.cached) {
+        const cached = Buffer.from(permit.cached.body, 'base64');
+        // 旧日志里可能缓存了业务失败的 200 响应；重放它会让这一局永久卡死。
+        if (!usableResponse(cached)) throw new Error(`已缓存的官方响应为业务失败: ${businessStatusCode(cached) ?? 'UNKNOWN'}`);
+        return new Response(cached, { status: permit.cached.status, headers: permit.cached.headers });
+      }
       if (permit.halted) throw new Error('ACTIONS_HALTED');
       if (permit.stop) throw new Error(permit.until > Date.now() ? 'ACTIONS_RATE_LIMIT' : 'ACTIONS_BUDGET');
       if (permit.granted) break;
@@ -91,7 +113,7 @@ function installDurability(): void {
     const response = await officialFetch(input, { ...options, signal: AbortSignal.timeout(20_000) });
     const body = Buffer.from(await response.arrayBuffer());
     const headers = Object.fromEntries(response.headers);
-    const settled = rpc('response', { key, response: { status: response.status, headers, body: body.toString('base64') } });
+    const settled = rpc('response', { key, response: { status: response.status, headers, body: body.toString('base64') }, usable: usableResponse(body) });
     if (settled.halted) throw new Error('ACTIONS_HALTED');
     if (response.status === 429) throw new Error('ACTIONS_RATE_LIMIT');
     // 已由 fetch 解压，重建响应时移除传输编码元数据。
@@ -135,6 +157,7 @@ async function runThread(): Promise<void> {
     pending = restored.pending ?? undefined;
     requestKey = undefined;
     let status = 'incomplete';
+    let reason = '';
     // 原工具日志仅在临时内存处理，公开 Actions 日志只输出计数和状态。
     const originalLog = console.log;
     const originalWarn = console.warn;
@@ -152,6 +175,7 @@ async function runThread(): Promise<void> {
       status = 'accepted';
     } catch (error) {
       const message = (error as Error).message;
+      reason = reasonOf(error);
       // 限速只退避当前线程，协调器已按节点记录 Retry-After；恢复点已落盘，可以继续同一游戏。
       if (message === 'ACTIONS_RATE_LIMIT') status = 'waiting';
       else if (message === 'ACTIONS_HALTED') { status = 'halted'; stopping = true; }
@@ -166,11 +190,11 @@ async function runThread(): Promise<void> {
       // 节点被熔断时协调器会交回租约，此时本轮落盘和状态回写会被拒绝，数据已在测试服 NDJSON 中。
       try {
         syncFiles();
-        rpc('done', { status, count });
+        rpc('done', { status, count, reason });
       } catch {
         console.warn(JSON.stringify({ worker, slug, status, note: '租约已交回，保留已落盘数据' }));
       }
-      console.log(JSON.stringify({ worker, slug, status, count }));
+      console.log(JSON.stringify({ worker, slug, status, count, reason }));
     }
     if (!stopping) await new Promise(resolve => setTimeout(resolve, numberFromEnv('OAKS_GAME_SWITCH_DELAY_MS', 10_000)));
   }

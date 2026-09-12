@@ -28,6 +28,14 @@ export class ProtocolHttpError extends Error {
   }
 }
 
+// 官方把业务结果放在 200 响应的 status.code 里，HTTP 层看不出失败。
+export class ProtocolStatusError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = "ProtocolStatusError";
+  }
+}
+
 function parseRetryAfter(value: string | null): number {
   if (!value) return 0;
   const seconds = Number(value);
@@ -106,7 +114,9 @@ export async function command(endpoint: string, cookie: string, name: string, ex
     );
   }
   const result = await response.json() as JSONMap;
-  if (result.status?.code && result.status.code !== "OK") throw new Error(`${name}${extra.action?.name ? `/${extra.action.name}` : ""}: ${JSON.stringify(result.status)}`);
+  if (result.status?.code && result.status.code !== "OK") {
+    throw new ProtocolStatusError(String(result.status.code), `${name}${extra.action?.name ? `/${extra.action.name}` : ""}: ${JSON.stringify(result.status)}`);
+  }
   return result;
 }
 

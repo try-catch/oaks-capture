@@ -13,7 +13,7 @@ import { numberOption, selectGames, stringOption } from "./src/cli";
 import { classifyRound, discoverFeatureInventory, FeatureInventory, includeObservedFeatures } from "./src/features";
 import { discoverGame } from "./src/game-definition";
 import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, upsertMongoRound } from "./src/mongo-store";
-import { actionFeatureKey, actionSpinType, command, JSONMap, nextAction, openSession, protocolAction, ProtocolHttpError, roundSpinType, Session } from "./src/protocol";
+import { actionFeatureKey, actionSpinType, command, JSONMap, nextAction, openSession, protocolAction, ProtocolHttpError, ProtocolStatusError, roundSpinType, Session } from "./src/protocol";
 import { buildPlayableActions, discoverShop, PlayAction, ShopInventory } from "./src/shop";
 import { validateGameRound } from "./src/validators";
 
@@ -47,6 +47,19 @@ export function selectedModeTypes(expected: number[], requested: number[]): numb
   return expected.filter(type => requested.includes(type));
 }
 
+// 官方会话被重开后，当前这一局已经无法完成，但游戏本身可以继续。
+const SESSION_INVALID_CODES = ["GAME_REOPENED", "GAME_CLOSED", "SESSION_EXPIRED", "SESSION_NOT_FOUND"];
+
+// “这一局不能再用了”的原因：官方业务失败（含会话重开），
+// 或协调器判定上一轮结果未知而拒绝重放。两种情况都只需丢弃未完成帧并重新登录。
+export function recoverableRoundError(error: unknown): boolean {
+  if (error instanceof ProtocolStatusError) return SESSION_INVALID_CODES.includes(error.code);
+  const message = error instanceof Error ? error.message : String(error);
+  return SESSION_INVALID_CODES.some((code) => message.includes(code))
+    || message.includes("业务失败")
+    || message.includes("禁止自动重放");
+}
+
 async function waitForRetry(delayMs: number, game: RegistryGame): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < delayMs) {
@@ -68,8 +81,9 @@ async function openSessionWithRetry(
       return await openSession(definition);
     } catch (error) {
       lastError = error;
-      if (captureRuntime) throw error;
       if (attempt > maxRetries) break;
+      // 会话建立失败在持久化模式下同样要重试：官方会重开会话，
+      // 一次登录失败不应该让整个游戏在本轮失败。
       const delay = Math.max(retryDelayMs(error, attempt), throttle.recordRateLimit(error, game.slug));
       console.warn(`[session ${game.slug} ${attempt}/${maxRetries}] ${(error as Error).message}，等待 ${Math.ceil(delay / 1000)} 秒后重试`);
       await waitForRetry(delay, game);
@@ -372,13 +386,19 @@ export async function captureGame(
       }
       if (throttle.spinDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, throttle.spinDelayMs));
     } catch (error) {
-      if (captureRuntime) throw error;
-      if ((error as Error).message.includes("SERVER_ERROR") && attemptedAction?.name === "buy_spin") {
+      const message = (error as Error).message;
+      // 预算与限速信号必须交回 worker，由它决定退避还是停机。
+      if (message === "ACTIONS_BUDGET" || message === "ACTIONS_RATE_LIMIT" || message === "ACTIONS_HALTED") throw error;
+      if (message.includes("SERVER_ERROR") && attemptedAction?.name === "buy_spin") {
         const spinType = actionSpinType(attemptedAction);
         if (attemptedAction.params.bet_factor !== undefined) omitBuyFactor.add(spinType);
         else if (typeof attemptedAction.params.selected_mode !== "string") stringBuyMode.add(spinType);
         else if (definition.clientFamily !== "clients_kendoo") omitBuyFactor.delete(spinType);
       }
+      // 可恢复的会话失效：丢掉这一局未完成帧后重新登录，不能因此让整个游戏失败。
+      // 其余错误在持久化模式下仍然直接抛出，保持“结果未知不自动重放”的约束。
+      if (captureRuntime && recoverableRoundError(error)) captureRuntime.savePending(undefined);
+      else if (captureRuntime) throw error;
       retries++;
       if (retries > maxRetries) throw new Error(`${game.slug} 连续失败 ${retries} 次: ${(error as Error).message}`);
       const rateLimitDelay = throttle.recordRateLimit(error, game.slug);

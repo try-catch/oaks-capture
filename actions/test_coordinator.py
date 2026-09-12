@@ -70,8 +70,31 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.call('permit', key=self.key, request={})
         response = {'status': 200, 'headers': {}, 'body': base64.b64encode(b'{}').decode()}
-        self.call('response', key=self.key, response=response)
+        self.call('response', key=self.key, response=response, usable=True)
         self.assertEqual(self.call('permit', key=self.key, request={})['cached'], response)
+
+    def test_business_failure_in_200_is_never_replayed(self):
+        self.call('permit', key=self.key, request={})
+        # 官方用 200 + status.code 表示业务失败：重放它会让这一局永久卡死。
+        failed = {'status': 200, 'headers': {}, 'body': base64.b64encode(b'{"status":{"code":"GAME_REOPENED"}}').decode()}
+        self.call('response', key=self.key, response=failed, usable=False)
+        self.clear_node_backoff()
+        self.assertTrue(self.call('permit', key=self.key, request={})['granted'])
+        # 重新请求后拿到可用响应，之后才允许重放。
+        ok = {'status': 200, 'headers': {}, 'body': base64.b64encode(b'{"status":{"code":"OK"}}').decode()}
+        self.call('response', key=self.key, response=ok, usable=True)
+        self.assertEqual(self.call('permit', key=self.key, request={})['cached'], ok)
+
+    def test_legacy_journal_without_usable_flag_is_not_replayed(self):
+        self.call('permit', key=self.key, request={})
+        self.call('response', key=self.key, response={'status': 200, 'headers': {}, 'body': ''})
+        journal = self.store.directory / 'one' / (self.key + '.json')
+        entry = read(journal)
+        del entry['usable']
+        atomic(journal, entry)
+        # 旧版本日志没有可用性标记，必须重新请求而不是盲目重放。
+        self.clear_node_backoff()
+        self.assertTrue(self.call('permit', key=self.key, request={})['granted'])
 
     def test_single_node_throttle_backs_off_only_that_node(self):
         self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)

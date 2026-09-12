@@ -284,9 +284,16 @@ class Store:
             # 等待节点自身间隔的请求不占用队首，避免一个正在退避的出口拖慢其它出口。
             eligible = [item for item in waiters if now >= state['nodeUntil'].get(item.get('node', ''), 0)]
             if len(state['permits']) >= state['topology']['maxInFlight']:
-                return {'wait': 1000}
-            if not eligible or eligible[0]['key'] != key:
-                return {'wait': 1000}
+                return {'wait': 500}
+            if eligible and eligible[0]['key'] != key:
+                return {'wait': 500}
+            if not eligible:
+                # 队首就是自己、但还在等本节点间隔时返回精确剩余时间，
+                # 否则固定轮询会把整体节奏压到远低于授权并发。
+                ready = state['nodeUntil'].get(node, 0)
+                if waiters and waiters[0]['key'] == key and now < ready:
+                    return {'wait': max(50, ready - now)}
+                return {'wait': 500}
             if check_legacy:
                 old = subprocess.check_output(['docker', 'inspect', '--format', '{{.State.Running}}', 'oaks-capture'], text=True).strip()
                 if old != 'false':

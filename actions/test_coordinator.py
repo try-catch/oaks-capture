@@ -167,7 +167,8 @@ class RecoveryTests(unittest.TestCase):
     def test_per_node_request_interval_and_reject_report_path_escape(self):
         self.call('permit', key=self.key, request={})
         other = hashlib.sha256(b'other').hexdigest()
-        self.assertEqual(self.call('permit', key=other, request={})['wait'], 1000)
+        # 已有请求在飞行时，同一出口的第二个请求必须等待。
+        self.assertGreater(self.call('permit', key=other, request={})['wait'], 0)
         self.call('response', key=self.key, response={'status': 200, 'headers': {}, 'body': ''})
         state = read(self.store.state_path)
         state['nodeUntil']['1'] = time.time() * 1000 + 60_000
@@ -176,6 +177,17 @@ class RecoveryTests(unittest.TestCase):
         self.assertGreater(self.call('permit', key=other, request={})['wait'], 0)
         with self.assertRaises(ValueError):
             self.call('files', files={'../../escape': '{}'})
+
+    def test_head_of_line_returns_precise_node_spacing_wait(self):
+        # 队首只是在自己节点的间隔里时，必须返回精确剩余时间；
+        # 固定 1 秒轮询会把整体节奏压到远低于授权并发。
+        state = read(self.store.state_path)
+        state['nodeUntil']['1'] = time.time() * 1000 + 400
+        state['topology']['nodeMs'] = 400
+        atomic(self.store.state_path, state)
+        wait = self.call('permit', key=hashlib.sha256(b'head').hexdigest(), request={})['wait']
+        self.assertGreater(wait, 0)
+        self.assertLessEqual(wait, 400)
 
     def test_corrupt_state_is_not_reset(self):
         self.store.state_path.write_text('broken')

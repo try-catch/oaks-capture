@@ -397,7 +397,7 @@ export async function captureGame(
       }
       // 可恢复的会话失效：丢掉这一局未完成帧后重新登录，不能因此让整个游戏失败。
       // 其余错误在持久化模式下仍然直接抛出，保持“结果未知不自动重放”的约束。
-      if (captureRuntime && recoverableRoundError(error)) captureRuntime.savePending(undefined);
+      if (captureRuntime && recoverableRoundError(error)) captureRuntime.discardPending();
       else if (captureRuntime) throw error;
       retries++;
       if (retries > maxRetries) throw new Error(`${game.slug} 连续失败 ${retries} 次: ${(error as Error).message}`);

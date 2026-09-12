@@ -82,6 +82,9 @@ function installDurability(): void {
   installCaptureRuntime({
     pending: () => pending,
     savePending: value => { rpc('pending', { value }); pending = value; },
+    // 丢弃未完成局时必须一并清掉请求日志键：否则后续请求会复用同一键，
+    // 被协调器用旧响应重放（重新登录也会命中缓存，拿到假会话）。
+    discardPending: () => { rpc('pending', { value: undefined }); pending = undefined; requestKey = undefined; },
     requestStep: (id, step) => { requestKey = crypto.createHash('sha256').update(`${slug}:${id}:${step}`).digest('hex'); },
     writeDocument: document => { rpc('append', { document, line: JSON.stringify(document) }); },
     acknowledge: document => { rpc('ack', { hash: document.sourceRoundHash }); pending = undefined; requestKey = undefined; },
@@ -156,6 +159,9 @@ async function runThread(): Promise<void> {
     for (const [name, value] of Object.entries(restored.files)) fs.writeFileSync(path.join(directory, name), String(value), { mode: 0o600 });
     pending = restored.pending ?? undefined;
     requestKey = undefined;
+    // 官方 demo 会话空闲约 61 秒即被重开，跨运行恢复未完成局必然拿着死会话重放，
+    // 只会产生 GAME_REOPENED。因此只恢复已落盘数据，不恢复未完成局。
+    if (pending) { rpc('pending', { value: undefined }); pending = undefined; }
     let status = 'incomplete';
     let reason = '';
     // 原工具日志仅在临时内存处理，公开 Actions 日志只输出计数和状态。

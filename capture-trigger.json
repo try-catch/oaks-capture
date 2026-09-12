@@ -1,6 +1,6 @@
 {
   "purpose": "改动本文件并推送到 main 会触发一次真实采集运行；普通代码推送不会触发。",
-  "note": "按 OAKS_MAX_CLAIMS=6 的安全并发启动一轮，用于验证 GAME_REOPENED 失败率是否回到 0",
+  "note": "验证 requestKey 泄漏修复：重新登录必须产生真实 login/start 请求，GAME_REOPENED 失败率应回到接近 0",
   "requestedBy": "operator",
-  "requestedAt": "2026-09-12T17:31:37Z"
+  "requestedAt": "2026-09-12T17:41:13Z"
 }

@@ -43,20 +43,27 @@ test("持久化模式下不再一遇错误就让整个游戏失败", () => {
   const source = fs.readFileSync(path.resolve(__dirname, "..", "oaks.ts"), "utf8");
   // 旧实现在安装 captureRuntime 后直接 throw，导致 Actions 里任何一次会话重开都终结该游戏；
   // 现在只有“不可恢复”的错误才抛出，可恢复的会话失效先丢弃未完成局。
-  assert.match(source, /recoverableRoundError\(error\)\) captureRuntime\.savePending\(undefined\);\s*\n\s*else if \(captureRuntime\) throw error;/);
+  assert.match(source, /recoverableRoundError\(error\)\) captureRuntime\.discardPending\(\);\s*\n\s*else if \(captureRuntime\) throw error;/);
   // 会话建立失败在持久化模式下也必须重试。
   assert.equal(source.match(/if \(captureRuntime\) throw error/g)?.length, 1);
 });
 
 test("可恢复的会话失效会丢弃未完成局并重新登录", () => {
   const source = fs.readFileSync(path.resolve(__dirname, "..", "oaks.ts"), "utf8");
-  assert.match(source, /recoverableRoundError\(error\)\) captureRuntime\.savePending\(undefined\)/);
+  assert.match(source, /recoverableRoundError\(error\)\) captureRuntime\.discardPending\(\)/);
   assert.match(source, /ACTIONS_BUDGET.*ACTIONS_RATE_LIMIT.*ACTIONS_HALTED/);
 });
 
 test("协调器只重放可用响应，业务失败的 200 必须重新请求", () => {
   assert.match(coordinator, /previous\.get\('usable'\) is True/);
   assert.match(coordinator, /entry\['usable'\] = bool\(req\.get\('usable'/);
+});
+
+test("丢弃未完成局必须同时清掉请求日志键，否则重新登录会被缓存重放", () => {
+  const workerSource = fs.readFileSync(path.resolve(__dirname, "..", "actions", "worker.ts"), "utf8");
+  assert.match(workerSource, /discardPending: \(\) => \{[\s\S]{0,200}?requestKey = undefined/);
+  // 跨运行恢复未完成局必然拿着死会话重放，只恢复已落盘数据。
+  assert.match(workerSource, /if \(pending\) \{ rpc\('pending', \{ value: undefined \}\); pending = undefined; \}/);
 });
 
 test("worker 拒绝重放已缓存的业务失败响应并输出可诊断原因", () => {

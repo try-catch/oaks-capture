@@ -5,8 +5,10 @@ import type { PlayAction } from './shop';
 export interface PendingRound { id: string; session: Session; action: PlayAction; frames: JSONMap[] }
 export interface CaptureRuntime {
   pending(): PendingRound | undefined;
-  // 传 undefined 表示丢弃无法完成的未完成局（例如会话被官方重开）。
-  savePending(round: PendingRound | undefined): void;
+  savePending(round: PendingRound): void;
+  // 丢弃无法完成的未完成局：必须同时清掉请求日志键，
+  // 否则后续请求会复用同一个键并被协调器用旧响应重放，重新登录也会被缓存掉。
+  discardPending(): void;
   requestStep(id: string, step: number): void;
   writeDocument(document: Record<string, unknown>): void;
   acknowledge(document: Record<string, unknown>): void;

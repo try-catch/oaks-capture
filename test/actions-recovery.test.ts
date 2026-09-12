@@ -12,7 +12,7 @@ test('恢复特殊局时复用已有帧和会话，不重新发起基础 spin', 
   let pending: PendingRound | undefined = { id: 'fixture-round', session, action, frames: [first] };
   const steps: number[] = [];
   const original = globalThis.fetch;
-  installCaptureRuntime({ pending: () => pending, savePending: value => { pending = value; },
+  installCaptureRuntime({ pending: () => pending, savePending: value => { pending = value; }, discardPending() { pending = undefined; },
     requestStep: (_id, step) => { steps.push(step); }, writeDocument() {}, acknowledge() {}, syncFiles() {}, shouldStop: () => false });
   const calls: any[] = [];
   globalThis.fetch = async (_input, options) => {

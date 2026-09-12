@@ -20,6 +20,10 @@ import { validateGameRound } from "./src/validators";
 const args = process.argv.slice(2);
 const targetPerFeature = numberOption(args, "--target-per-feature", 10);
 const maxNewRounds = numberOption(args, "--rounds", 1_000_000);
+const normalRounds = numberOption(args, "--normal-rounds", 0);
+const targetPerMode = numberOption(args, "--target-per-mode", 10);
+const modeQuota = args.includes("--normal-rounds") || args.includes("--target-per-mode");
+const explicitModeTypes = stringOption(args, "--mode-types", "").split(",").filter(Boolean).map(Number);
 const maxRetries = numberOption(args, "--max-retries", 5);
 const explicitRequired = stringOption(args, "--require", "").split(",").map((value) => value.trim()).filter(Boolean);
 
@@ -35,6 +39,12 @@ export function retryDelayMs(error: unknown, attempt: number): number {
   const rateLimited = error instanceof ProtocolHttpError && error.status === 429;
   const exponential = Math.min(60_000, 2_000 * (2 ** Math.max(0, attempt - 1)));
   return Math.max(rateLimited ? 10_000 : 1_000, exponential, rateLimited ? error.retryAfterMs : 0);
+}
+
+export function selectedModeTypes(expected: number[], requested: number[]): number[] {
+  if (!requested.length) return expected;
+  if (requested.some(type => !Number.isInteger(type) || !expected.includes(type))) throw new Error("--mode-types 包含代码未声明的模式");
+  return expected.filter(type => requested.includes(type));
 }
 
 async function waitForRetry(delayMs: number, game: RegistryGame): Promise<void> {
@@ -178,7 +188,6 @@ export async function playRound(session: Session, action: PlayAction): Promise<J
   let response = frames.at(-1) ?? await command(session.endpoint, session.cookie, "play", {
     session_id: session.sessionId,
     action: protocolAction(action),
-    bet: session.defaultBet,
   });
   if (!frames.length) { frames.push(response); captureRuntime?.savePending(pending); }
   for (let step = 0; step < 100; step++) {
@@ -202,6 +211,11 @@ function actionCostMultiplier(action: PlayAction, shop: ShopInventory): number {
   return entries.find((entry) => entry.feature === feature)?.price ?? 1;
 }
 
+// 配额依据冻结的模式列表计算，重新登录不能让尚未完成的购买模式消失。
+export function remainingModeActions(actions: PlayAction[], counts: Record<number, number>, normal: number, special: number): PlayAction[] {
+  return actions.filter(action => (counts[actionSpinType(action)] ?? 0) < (actionSpinType(action) === 0 ? normal : special));
+}
+
 export async function captureGame(
   game: RegistryGame,
   throttle = new CaptureThrottle({ spinDelayMs: SPIN_DELAY_MS, fallbackSpinDelayMs: FALLBACK_SPIN_DELAY_MS }),
@@ -219,6 +233,16 @@ export async function captureGame(
   const { counts, hashes } = countCoverage(priorDocuments);
   const actionEvidence = collectActionEvidence(priorDocuments);
 
+  // 模式补量只统计去重后的完整局，不把普通模式数量当作稀有分支覆盖。
+  const modeCounts: Record<number, number> = {};
+  for (const document of new Map(priorDocuments.map(doc => [doc.sourceRoundHash, doc])).values()) {
+    if (modeQuota) {
+      if (document.gameId !== game.gameId || document.game !== game.slug || document.testOnly === true) throw new Error("模式补量文件含不属于本游戏的样本");
+      validateGameRound(game, document.data, Number(document.bet));
+    }
+    const type = roundSpinType(document.data, Number(document.buy ?? 0));
+    modeCounts[type] = (modeCounts[type] ?? 0) + 1;
+  }
   let mongo: MongoClient | undefined;
   let collection: any;
   const database = process.env.OAKS_MONGO_DB ?? game.dbName;
@@ -252,14 +276,32 @@ export async function captureGame(
   let retries = 0;
   let lastCompletedHash = priorDocuments.at(-1)?.sourceRoundHash;
   let attempted = 0;
+  let attemptedAction: PlayAction | undefined;
+  const omitBuyFactor = new Set<number>();
+  const stringBuyMode = new Set<number>();
 
-  while ((captureRuntime?.pending() || !coverageComplete(required, counts, targetPerFeature)) && attempted < maxNewRounds) {
+  let quotaActions = buildPlayableActions(session.start, discoverShop(session.start), definition.clientFamily);
+  if (modeQuota) {
+    const declared = definition.settings;
+    const buys = declared.buyModes?.map(mode => mode.spinType) ?? Object.keys(declared.buyBonusPrices ?? {}).map(Number);
+    const expected = selectedModeTypes([0, ...buys, ...Object.keys(declared.boosterPrices ?? {}).map(mode => 1000 + Number(mode))], explicitModeTypes);
+    if (expected.some(type => !quotaActions.some(action => actionSpinType(action) === type))) throw new Error("官方会话未提供代码声明的全部模式，禁止把缺失模式标记达标");
+    quotaActions = quotaActions.filter(action => expected.includes(actionSpinType(action)));
+  }
+  const remainingModes = (): PlayAction[] => remainingModeActions(quotaActions, modeCounts, normalRounds, targetPerMode);
+  const isComplete = (): boolean => modeQuota ? remainingModes().length === 0 : coverageComplete(required, counts, targetPerFeature);
+  while ((captureRuntime?.pending() || !isComplete()) && attempted < maxNewRounds) {
     if (captureRuntime?.shouldStop()) throw new Error("ACTIONS_BUDGET");
     try {
       const shop = discoverShop(session.start);
-      const actions = buildPlayableActions(session.start, shop);
+      const actions = buildPlayableActions(session.start, shop, definition.clientFamily, omitBuyFactor, stringBuyMode);
       if (!actions.length) throw new Error("start 没有可执行动作");
-      const action = captureRuntime?.pending()?.action ?? chooseAction(actions, counts, targetPerFeature, required, actionEvidence, captured);
+      const needed = modeQuota ? remainingModes()[0] : undefined;
+      const action = captureRuntime?.pending()?.action ?? (modeQuota
+        ? actions.find(candidate => needed && actionSpinType(candidate) === actionSpinType(needed))
+        : chooseAction(actions, counts, targetPerFeature, required, actionEvidence, captured));
+      if (!action) throw new Error("当前会话缺少待采模式，重新登录后重试");
+      attemptedAction = action;
       const rawFrames = await playRound(session, action);
       attempted++;
       const frames = sanitizeProtocolData(rawFrames) as JSONMap[];
@@ -307,6 +349,7 @@ export async function captureGame(
         }
         const actionFeatures = (actionEvidence[targetFeature(action) ?? "spin"] ??= new Set<string>());
         for (const feature of features) actionFeatures.add(feature);
+        modeCounts[Number(document.buy)] = (modeCounts[Number(document.buy)] ?? 0) + 1;
         captured++;
         newCaptured++;
       }
@@ -325,11 +368,17 @@ export async function captureGame(
         updatedAt: new Date().toISOString(),
       });
       if (checkpointDue) {
-        console.log(`[${game.slug}] captured=${captured} new=${newCaptured} frames=${frames.length} remaining=${JSON.stringify(remainingTargets(counts, required, targetPerFeature))}`);
+        console.log(`[${game.slug}] captured=${captured} new=${newCaptured} frames=${frames.length} remaining=${JSON.stringify(modeQuota ? {modeCounts} : remainingTargets(counts, required, targetPerFeature))}`);
       }
       if (throttle.spinDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, throttle.spinDelayMs));
     } catch (error) {
       if (captureRuntime) throw error;
+      if ((error as Error).message.includes("SERVER_ERROR") && attemptedAction?.name === "buy_spin") {
+        const spinType = actionSpinType(attemptedAction);
+        if (attemptedAction.params.bet_factor !== undefined) omitBuyFactor.add(spinType);
+        else if (typeof attemptedAction.params.selected_mode !== "string") stringBuyMode.add(spinType);
+        else if (definition.clientFamily !== "clients_kendoo") omitBuyFactor.delete(spinType);
+      }
       retries++;
       if (retries > maxRetries) throw new Error(`${game.slug} 连续失败 ${retries} 次: ${(error as Error).message}`);
       const rateLimitDelay = throttle.recordRateLimit(error, game.slug);
@@ -342,7 +391,7 @@ export async function captureGame(
     }
   }
 
-  const complete = coverageComplete(required, counts, targetPerFeature);
+  const complete = isComplete();
   await writeCheckpoint(checkpointPath, {
     brand: "3 OAKS",
     slug: game.slug,
@@ -359,16 +408,18 @@ export async function captureGame(
     captured,
     newCaptured,
     targetPerFeature,
+    modeQuota, normalRounds, targetPerMode, modeCounts,
     required,
     counts,
-    remaining: remainingTargets(counts, required, targetPerFeature),
+    remaining: modeQuota ? remainingModes().map(action => actionSpinType(action)) : remainingTargets(counts, required, targetPerFeature),
+    branchRemaining: remainingTargets(counts, required, targetPerFeature),
     spinDelayMs: throttle.spinDelayMs,
     rateLimitEvents: throttle.events,
     complete,
   };
-  await fs.writeFile(path.join(outputDir, isDefaultOutput ? "coverage.json" : `${outputBase}-coverage.json`), `${JSON.stringify(report, null, 2)}\n`);
-  if (!complete) throw new Error(`${game.slug} 达到本轮上限 ${maxNewRounds}，特殊分支覆盖尚未完成`);
-  console.log(`3 OAKS ${game.slug} 采集完成：${captured} 局，全部分支 >= ${targetPerFeature}`);
+  await fs.writeFile(path.join(outputDir, isDefaultOutput ? (modeQuota ? "mode-coverage.json" : "coverage.json") : `${outputBase}-${modeQuota ? "mode-" : ""}coverage.json`), `${JSON.stringify(report, null, 2)}\n`);
+  if (!complete) throw new Error(`${game.slug} 达到本轮上限 ${maxNewRounds}，采集目标尚未完成`);
+  console.log(`3 OAKS ${game.slug} 采集完成：${captured} 局，${modeQuota ? "模式数量达标" : `全部分支 >= ${targetPerFeature}`}`);
   } finally {
     await mongo?.close().catch(() => undefined);
   }
@@ -380,7 +431,7 @@ async function main(): Promise<void> {
   for (const game of games) {
     await captureGame(game, throttle);
     // 显式 Mongo 环境的采集完成后立即生成严格的测试服验收证据。
-    if (process.env.OAKS_TEST_MONGO_URI || process.env.OAKS_MONGO_URI) finalizeTestCapture(game.slug);
+    if (!modeQuota && (process.env.OAKS_TEST_MONGO_URI || process.env.OAKS_MONGO_URI)) finalizeTestCapture(game.slug);
   }
 }
 

@@ -101,8 +101,22 @@ async function textOrEmpty(url: string): Promise<string> {
   } catch { return ""; }
 }
 
+/** 磁盘上的文件名是解码后的形态，与静态服务的 URI 解码行为保持一致。 */
+function decodePathname(pathname: string): string {
+  return pathname
+    .split("/")
+    .map((segment) => {
+      try {
+        return decodeURIComponent(segment);
+      } catch {
+        return segment;
+      }
+    })
+    .join("/");
+}
+
 function localPath(target: string, url: URL): string {
-  return path.join(target, url.pathname.replace(/^\//, ""));
+  return path.join(target, decodePathname(url.pathname).replace(/^\//, ""));
 }
 
 async function existingUrls(game: StaticGame, target: string): Promise<URL[]> {
@@ -144,7 +158,7 @@ export function launcherHTML(game: StaticGame): string {
     desktop:{client_url:base,log_url:'',revision:'${game.clientRevision}',server_url:api+'/${game.slug}/',use_cdn:false,version:'${game.clientVersion}'},
     mobile:{client_url:base,log_url:'',revision:'${game.clientRevision}',server_url:api+'/${game.slug}/',use_cdn:false,version:'${game.clientVersion}'},
     gr:{revision:'${game.runnerRevision}',static_path:location.origin+'${runnerPath}',use_cdn:false},
-    options:{allow_autoplay:'1',allow_gamble:'0',game_name:'${game.slug}',incognito:'1',lang:lang,mobile:/Mobi|Android/i.test(navigator.userAgent)?'1':'0',profile:'default',project_name:'local',protocol:'${game.protocol}',provider:'3oaks',quickspin:'1',sound:'1',title:${JSON.stringify(game.title)},token:token,vendor:'${game.vendor}',wl:'local'},
+    options:{show_replay_button:'0',allow_autoplay:'1',allow_gamble:'0',game_name:'${game.slug}',incognito:'1',lang:lang,mobile:/Mobi|Android/i.test(navigator.userAgent)?'1':'0',profile:'default',project_name:'local',protocol:'${game.protocol}',provider:'3oaks',quickspin:'1',sound:'1',title:${JSON.stringify(game.title)},token:token,vendor:'${game.vendor}',wl:'local'},
     promo_widget:{revision:'${game.promoRevision}',static_path:location.origin+'${promoPath}',use_cdn:false},
     sentry_url:'',static_domain:location.origin,static_domains:{domains_url:'',force_domain:location.host,log_url:'',metric_url:'',timeout:1000},translations:{}
   };

@@ -45,24 +45,32 @@ export function discoverShop(start: JSONMap): ShopInventory {
   };
 }
 
-export function buildPlayableActions(start: JSONMap, shop: ShopInventory): PlayAction[] {
+export function buildPlayableActions(start: JSONMap, shop: ShopInventory, clientFamily?: string, omitBuyFactor = new Set<number>(), stringBuyMode = new Set<number>()): PlayAction[] {
   const context = start.context ?? {};
   const state = context.current ? context[context.current] ?? {} : {};
-  const betPerLine = Number(state.bet_per_line ?? 1);
+  const configuredBets = Array.isArray(start.settings?.bets)
+    ? start.settings.bets.map((value: unknown) => Number(value)).filter((value: number) => Number.isFinite(value) && value > 0)
+    : [];
+  // 采集使用官方允许的最低下注，避免高倍购买快速耗尽试玩余额。
+  const betPerLine = configuredBets.length ? Math.min(...configuredBets) : Number(state.bet_per_line ?? 1);
   const lines = Number(state.lines ?? 1);
+  // 官方客户端购买请求会单独传 bet_factor；部分游戏的计费倍数不等于线数。
+  // Kendoo 的购买入口直接调用 sendPlayAsync，官方请求不包含 bet_factor。
+  const betFactor = Number(start.settings?.bet_factor?.[0]);
+  const betParams = { bet_per_line: betPerLine, lines };
   const availableActions = new Set((Array.isArray(context.actions) ? context.actions : []).map(String));
   const actions: PlayAction[] = [];
-  if (availableActions.has("spin")) actions.push({ name: "spin", params: { bet_per_line: betPerLine, lines } });
+  if (availableActions.has("spin")) actions.push({ name: "spin", params: { ...betParams } });
   if (availableActions.has("spin")) {
     for (const entry of shop.boosters) {
-      actions.push({ name: "spin", params: { bet_per_line: betPerLine, lines, ante_bet: entry.price, selected_mode: entry.providerMode } });
+      actions.push({ name: "spin", params: { ...betParams, ante_bet: entry.price, selected_mode: entry.providerMode } });
     }
   }
   if (availableActions.has("buy_spin")) {
     for (const entry of shop.buyBonuses) {
       actions.push({
         name: "buy_spin",
-        params: { bet_per_line: betPerLine, lines, selected_mode: entry.providerMode },
+        params: { ...betParams, ...(clientFamily !== "clients_kendoo" && (entry.spinType === undefined || !omitBuyFactor.has(entry.spinType)) && Number.isFinite(betFactor) && betFactor > 0 ? { bet_factor: betFactor } : {}), selected_mode: entry.spinType !== undefined && stringBuyMode.has(entry.spinType) ? entry.providerMode.toString() : entry.providerMode },
         spinType: entry.spinType,
       });
     }

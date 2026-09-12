@@ -7,6 +7,7 @@ import { featureTarget } from "./src/capture-checkpoint";
 import { sourceRoundHash } from "./src/mongo-store";
 import { roundSpinType } from "./src/protocol";
 import { validateGameRound } from "./src/validators";
+import { auditModeQuota } from "./src/mode-target";
 
 function arg(name: string, fallback: string): string {
   const index = process.argv.indexOf(name);
@@ -85,6 +86,11 @@ async function main(): Promise<void> {
   const required = [...new Set(["base-loss", "base-or-feature-win", ...(requestedRequired.length ? requestedRequired : (inventory?.required ?? []))])].sort();
   const targetPerFeature = Number(arg("--target-per-feature", "1"));
   const missing = required.filter((feature) => (coverage[feature] ?? 0) < featureTarget(feature, targetPerFeature));
+  const normalRounds = Number(arg("--normal-rounds", "0"));
+  const targetPerMode = Number(arg("--target-per-mode", "0"));
+  const modeQuota = auditModeQuota(game, lines.map((line) => {
+    try { return JSON.parse(line); } catch { return {}; }
+  }), normalRounds, targetPerMode);
   const report = {
     brand: "3 OAKS",
     game: game.slug,
@@ -115,11 +121,14 @@ async function main(): Promise<void> {
     required,
     targetPerFeature,
     missing,
+    modeCounts: modeQuota.counts,
+    modeTargets: modeQuota.targets,
+    modeMissing: modeQuota.missing,
     errors: errors.slice(0, 100),
   };
   await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   console.log(JSON.stringify(report, null, 2));
-  if (errors.length || missing.length) process.exitCode = 1;
+  if (errors.length || missing.length || modeQuota.missing.length) process.exitCode = 1;
 }
 
 main().catch((error) => {

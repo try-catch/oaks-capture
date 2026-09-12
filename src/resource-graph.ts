@@ -35,7 +35,7 @@ export interface ResourceGraphOptions {
 const TEXT_EXTENSIONS = new Set([
   ".atlas", ".css", ".fnt", ".html", ".htm", ".js", ".json", ".manifest", ".map", ".mjs", ".svg", ".txt", ".xml",
 ]);
-const RESOURCE_EXTENSION = /\.(?:atlas|avif|bin|css|csv|eot|fnt|gif|html?|ico|jpe?g|js|json|manifest|map|mjs|mp3|mp4|ogg|otf|png|svg|ttf|txt|wav|webm|webp|woff2?|xml)(?:[?#].*)?$/i;
+const RESOURCE_EXTENSION = /\.(?:atlas|avif|bin|css|csv|eot|fnt|gif|html?|ico|jpe?g|js|json|m4a|manifest|map|mjs|mp3|mp4|ogg|otf|png|skel|svg|ttf|txt|wav|webm|webp|woff2?|xml)(?:[?#].*)?$/i;
 
 function sha256(bytes: Uint8Array): string {
   return crypto.createHash("sha256").update(bytes).digest("hex");
@@ -90,6 +90,37 @@ function kendooResourceMap(text: string, base: URL): URL[] {
   return [...paths].map((value) => new URL(value, root));
 }
 
+const RUNTIME_ROOT = /^(https?:\/\/[^/]+\/(?:gs\/clients_[^/]+\/[^/]+\/[^/]+|gs\/gamerunner\/[^/]+|3oaks\/gs\/promo-widget\/[^/]+)\/)/i;
+
+/** 客户端脚本里的相对路径是相对客户端根目录，而不是 src/ 目录。 */
+function runtimeRootOf(base: URL): URL | undefined {
+  const root = base.href.match(RUNTIME_ROOT)?.[1];
+  return root ? new URL(root) : undefined;
+}
+
+/**
+ * 客户端把图集/骨骼类资源声明成 srcs + advancedSearchParams，每个扩展名对应一个真实文件
+ * （例如 bonus_accum.skel 同时需要 .atlas 与 .png）。只按字符串引用抓取会漏掉同族文件。
+ */
+function declaredAssetUrls(text: string, base: URL): URL[] {
+  const root = runtimeRootOf(base) ?? base;
+  const urls = new Map<string, URL>();
+  for (const match of text.matchAll(/srcs:"([^"]+)"[^}]*?advancedSearchParams:\{([^}]*)\}/g)) {
+    const source = match[1];
+    if (/[(),$]/.test(source)) continue;
+    const extension = path.posix.extname(source);
+    if (!extension) continue;
+    const stem = source.slice(0, -extension.length);
+    const extensions = new Set<string>([extension.slice(1)]);
+    for (const parameter of match[2].matchAll(/([A-Za-z0-9]+):"[0-9a-f]{6,}"/g)) extensions.add(parameter[1]);
+    for (const value of extensions) {
+      const url = canonicalUrl(`${stem}.${value}`, root);
+      if (url) urls.set(url.href, url);
+    }
+  }
+  return [...urls.values()];
+}
+
 function extractReferences(text: string, base: URL): URL[] {
   if (/\/clients_kendoo\//i.test(base.pathname)) {
     if (/resourceMap\.runpack\.json$/i.test(base.pathname)) return kendooResourceMap(text, base);
@@ -141,7 +172,7 @@ function extractReferences(text: string, base: URL): URL[] {
     let candidateForResolution = candidate;
     if (sourceExtension === ".js" || sourceExtension === ".mjs") {
       if (candidateForResolution.startsWith("../")) continue;
-      const runtimeRoot = base.href.match(/^(https?:\/\/[^/]+\/(?:gs\/clients_[^/]+\/[^/]+\/[^/]+|gs\/gamerunner\/[^/]+|3oaks\/gs\/promo-widget\/[^/]+)\/)/i)?.[1];
+      const runtimeRoot = runtimeRootOf(base)?.href;
       if (runtimeRoot) {
         if (/\/gs\/gamerunner\//i.test(runtimeRoot) && /^(?:src\/(?:game|libs)\.js|ui-new\/)/i.test(candidateForResolution)) continue;
         resolutionBase = new URL(runtimeRoot);
@@ -151,12 +182,30 @@ function extractReferences(text: string, base: URL): URL[] {
     const url = canonicalUrl(candidateForResolution, resolutionBase);
     if (url) urls.set(url.href, url);
   }
+  for (const url of declaredAssetUrls(text, base)) urls.set(url.href, url);
   return [...urls.values()];
+}
+
+/**
+ * 静态服务(nginx/openresty)会先把请求 URI 里的 %XX 解码再查磁盘，
+ * 所以本地镜像必须使用解码后的文件名，否则 Roboto%20Black.ttf 这类资源永远 404。
+ */
+function decodePathname(pathname: string): string {
+  return pathname
+    .split("/")
+    .map((segment) => {
+      try {
+        return decodeURIComponent(segment);
+      } catch {
+        return segment;
+      }
+    })
+    .join("/");
 }
 
 function destinationPath(target: string, url: URL): string {
   const root = path.resolve(target);
-  const destination = path.resolve(root, url.pathname.replace(/^\/+/, ""));
+  const destination = path.resolve(root, decodePathname(url.pathname).replace(/^\/+/, ""));
   if (destination !== root && !destination.startsWith(`${root}${path.sep}`)) {
     throw new Error(`资源本地路径越界: ${url.href}`);
   }

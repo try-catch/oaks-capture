@@ -28,3 +28,22 @@ test('恢复特殊局时复用已有帧和会话，不重新发起基础 spin', 
     assert.deepEqual(steps, [1, 1]);
   } finally { globalThis.fetch = original; installCaptureRuntime(undefined); }
 });
+
+test('首帧及奖励续帧采用官方 Runner 请求字段，不发送仅供 UI 使用的 bet', async () => {
+  const session = { endpoint: 'https://example.test', cookie: '', sessionId: 'fixture', defaultBet: 100 } as Session;
+  const original = globalThis.fetch;
+  const calls: any[] = [];
+  globalThis.fetch = async (_input, options) => {
+    calls.push(JSON.parse(String(options?.body)));
+    return new Response(JSON.stringify({ context: { round_finished: calls.length === 2, actions: calls.length === 1 ? ['respin'] : ['spin'] } }), {status: 200});
+  };
+  try {
+    await playRound(session, {name: 'spin', params: {bet_per_line: 5, bet_factor: 20, lines: 25}});
+    assert.deepEqual(calls.map(call => call.action.name), ['spin', 'respin']);
+    for (const call of calls) {
+      assert.equal(call.set_denominator, 1);
+      assert.equal(call.mobile, '0');
+      assert.equal('bet' in call, false);
+    }
+  } finally { globalThis.fetch = original; }
+});

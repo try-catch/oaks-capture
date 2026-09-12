@@ -49,6 +49,7 @@ test("static downloader 按动态客户端生成去重资源和启动器", () =>
   assert.equal(urls.some((url) => url.pathname.includes("/gamerunner/6.1.10/ui-new/")), false);
   assert.match(launcherHTML(game), /game:'3_super_hot_teapots'/);
   assert.match(launcherHTML(game), /clients_hraymo/);
+  assert.match(launcherHTML(game), /show_replay_button:'0'/);
   assert.equal(urls.some((url) => url.pathname.endsWith("/assets/i18n/en.json")), false);
   assert.equal(urls.some((url) => url.pathname.endsWith("/assets/i18n/zh.json")), false);
   assert.equal(urls.some((url) => url.pathname.endsWith("/assets/i18n/de.json")), false);

@@ -2,9 +2,11 @@
 
 公共仓库仅包含采集代码、测试和目录定义。NDJSON、凭据、原始响应及未完成局只保存在测试服，禁止上传 artifact。
 
-`workflow.yml` 发布为 `.github/workflows/capture.yml`。先配置 Secrets，再用 `workflow_dispatch / check` 验证；通过后设置仓库变量 `CAPTURE_ENABLED=true`。默认每小时第 17 分钟运行，20 个 GitHub-hosted Linux 节点从同一队列领取游戏，每款每轮最多 500 局，共享 40 分钟预算。
+`workflow.yml` 发布为 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。先用 `workflow_dispatch / check` 验证，通过后设置仓库变量 `CAPTURE_ENABLED=true`。默认每小时第 17 分钟运行，20 个 GitHub-hosted Linux 节点从同一队列领取游戏，每款每轮最多新增 500 局，共享 40 分钟预算。
 
 20 个节点不会获得 20 倍请求额度。协调器同时只允许一个官方请求，普通间隔 3 秒，重复 429 后间隔 5 秒；所有节点和后续运行共用持久化的 Retry-After 截止时间。切换游戏等待 10 秒。
+
+每个游戏按代码中已核实的官方模式定义验收：普通模式至少 100000 条；每个购买模式和每个加注模式分别至少 10000 条。Runner 每次只处理一个游戏，不在单节点内开启 8 个采集线程。任何 429 都按官方 `Retry-After` 暂停整个队列，不能通过增加 Runner 或出口继续请求。
 
 同时活跃的游戏会话最多 6 个，其余节点等待领取，不提前登录官方。已观测到请求间隔 61–62 秒时返回 `GAME_REOPENED`，因此不能让 20 个会话同时竞争共享节流。6 个是保守运行上限，不代表已确认官方超时阈值；已领取游戏结束后自动释放位置。
 

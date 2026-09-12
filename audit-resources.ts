@@ -28,8 +28,19 @@ async function atomicJSON(filename: string, value: unknown): Promise<void> {
   await fs.rename(temporary, filename);
 }
 
+/** 磁盘文件名是解码后的形态，与静态服务的 URI 解码行为保持一致。 */
 function diskPath(url: string): string {
-  return path.join(STATIC_TARGET, new URL(url).pathname.replace(/^\/+/, ""));
+  const pathname = new URL(url).pathname
+    .split("/")
+    .map((segment) => {
+      try {
+        return decodeURIComponent(segment);
+      } catch {
+        return segment;
+      }
+    })
+    .join("/");
+  return path.join(STATIC_TARGET, pathname.replace(/^\/+/, ""));
 }
 
 function hash(bytes: Uint8Array): string {

@@ -44,3 +44,16 @@ test("Mongo 存在额外文档时不能将数据标为完成", () => {
     "b".repeat(64), 10, {total: 2, valid: true, featureCounts: {}}
   ), /MongoDB 回读未通过/);
 });
+
+test("模式配额缺失时不能生成完成清单", () => {
+  assert.throws(() => buildDataManifest(
+    { gameId: 32608, slug: "joker_glitz_x1000", dbName: "oaks_joker_glitz_x1000" },
+    [{ sourceRoundHash: "a".repeat(64) }],
+    {
+      documents: 1, invalid: 0, duplicates: 0, sensitiveDocuments: 0, uniqueRoundHashes: 1,
+      coverage: {}, examples: {}, required: [], modeCounts: { 0: 99, 1: 10 }, modeMissing: [0],
+    },
+    "b".repeat(64), 10, { total: 1, valid: true, featureCounts: {}, modeCounts: { 0: 99, 1: 10 } },
+    { 0: 100, 1: 10 },
+  ), /模式配额未达标/);
+});

@@ -120,6 +120,60 @@ test("resource graph 按 KENDOO resourceMap 下载真实变体而非源素材逻
   }
 });
 
+test("resource graph 按静态服务的 URI 解码规则落盘文件名", async () => {
+  const target = await fs.mkdtemp(path.join(os.tmpdir(), "oaks-resource-decode-"));
+  const url = "https://static.test/gs/clients_ratpack/game/v1/assets/packs/fonts/Roboto%20Black.ttf";
+  const fetcher = async (): Promise<Response> => new Response("font-bytes", {
+    headers: { "content-type": "application/octet-stream" },
+  });
+  try {
+    const graph = await crawlResourceGraph([new URL(url)], fetcher as typeof fetch, {
+      concurrency: 1,
+      allowedHosts: new Set(["static.test"]),
+      target,
+    });
+    assert.equal(graph.failed.length, 0);
+    const written = path.join(target, "gs/clients_ratpack/game/v1/assets/packs/fonts/Roboto Black.ttf");
+    assert.equal(await fs.readFile(written, "utf8"), "font-bytes");
+    const encoded = path.join(target, "gs/clients_ratpack/game/v1/assets/packs/fonts/Roboto%20Black.ttf");
+    await assert.rejects(fs.readFile(encoded));
+  } finally {
+    await fs.rm(target, { recursive: true, force: true });
+  }
+});
+
+test("resource graph 按客户端 srcs 声明补齐 skel 同族的 atlas 与 png", async () => {
+  const target = await fs.mkdtemp(path.join(os.tmpdir(), "oaks-resource-declared-"));
+  const root = "https://static.test/gs/clients_goreel/game/v1/";
+  const entry = `${root}src/game.js`;
+  const expected = new Set([
+    entry,
+    `${root}assets/packs/720/bonus_accum.skel`,
+    `${root}assets/packs/720/bonus_accum.atlas`,
+    `${root}assets/packs/720/bonus_accum.png`,
+  ]);
+  const declaration = '{name:"bonus_accum",srcs:"./assets/packs/720/bonus_accum.skel",size:4457713,' +
+    'localized:false,data:{advancedSearchParams:{skel:"b70bf98a7c",atlas:"8fae2d82ce",png:"320dc3a372"},downloadRetriesTime:2e3}}';
+  const fetcher = async (input: string | URL | Request): Promise<Response> => {
+    const url = String(input);
+    if (!expected.has(url)) return new Response("missing", { status: 404 });
+    return new Response(url === entry ? declaration : "asset", {
+      headers: { "content-type": url.endsWith(".js") ? "application/javascript" : "application/octet-stream" },
+    });
+  };
+  try {
+    const graph = await crawlResourceGraph([new URL(entry)], fetcher as typeof fetch, {
+      concurrency: 2,
+      allowedHosts: new Set(["static.test"]),
+      target,
+    });
+    assert.equal(graph.failed.length, 0);
+    assert.deepEqual(graph.files.map((file) => file.url), [...expected].sort());
+  } finally {
+    await fs.rm(target, { recursive: true, force: true });
+  }
+});
+
 test("resource graph 按 GOREEL 图包目录推导 WebP 和 AVIF 图集而非源 PNG", async () => {
   const target = await fs.mkdtemp(path.join(os.tmpdir(), "oaks-resource-atlas-"));
   const roots = [

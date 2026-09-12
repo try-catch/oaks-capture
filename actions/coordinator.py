@@ -135,13 +135,13 @@ class Store:
         folder.mkdir(parents=True, exist_ok=True)
         private.mkdir(parents=True, exist_ok=True, mode=0o700)
         if op == 'load':
-            names = [slug + '.ndjson', 'feature-inventory.json', 'coverage.json', 'capture-checkpoint.json']
+            names = [slug + '.ndjson', 'feature-inventory.json', 'coverage.json', 'mode-coverage.json', 'capture-checkpoint.json']
             return {'files': {name: (folder / name).read_text() for name in names if (folder / name).exists()}, 'pending': read(private / 'round.json')}
         if op == 'pending':
             atomic(private / 'round.json', req['value'])
             return {}
         if op == 'files':
-            allowed = {'feature-inventory.json', 'start-template.json', 'coverage.json', 'validation-report.json', 'data-manifest.json', 'mongo-audit-test.json', 'capture-checkpoint.json'}
+            allowed = {'feature-inventory.json', 'start-template.json', 'coverage.json', 'mode-coverage.json', 'validation-report.json', 'data-manifest.json', 'mongo-audit-test.json', 'capture-checkpoint.json'}
             for name, content in req['files'].items():
                 if name not in allowed:
                     raise ValueError('拒绝写入非验收文件')

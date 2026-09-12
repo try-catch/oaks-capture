@@ -25,6 +25,7 @@ env:
   OAKS_SSH_HOST: ${{ secrets.OAKS_SSH_HOST }}
   OAKS_MONGO_HOST: ${{ secrets.OAKS_MONGO_HOST }}
   OAKS_MONGO_URI: ${{ secrets.OAKS_MONGO_URI }}
+  OAKS_PROVIDER_AUTHORIZED: ${{ secrets.OAKS_PROVIDER_AUTHORIZED }}
 
 jobs:
   prepare:

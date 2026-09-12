@@ -86,7 +86,12 @@ export async function openSession(game?: GameDiscovery): Promise<Session> {
 }
 
 export async function command(endpoint: string, cookie: string, name: string, extra: JSONMap): Promise<JSONMap> {
-  const body = JSON.stringify({ command: name, request_id: crypto.randomUUID().replaceAll("-", ""), ...extra });
+  // 与官方 Runner 保持一致，首帧和奖励续帧均携带相同的金额口径及运行参数。
+  const playOptions = name === "play" ? {
+    set_denominator: 1, quick_spin: false, sound: false, autogame: false,
+    mobile: "0", portrait: false, fullscreen: false,
+  } : {};
+  const body = JSON.stringify({ command: name, request_id: crypto.randomUUID().replaceAll("-", ""), ...playOptions, ...extra });
   const response = await fetch(`${endpoint}?gsc=${encodeURIComponent(name)}`, {
     method: "POST",
     headers: { "content-type": "text/plain", ...(cookie ? { cookie } : {}) },
@@ -101,7 +106,7 @@ export async function command(endpoint: string, cookie: string, name: string, ex
     );
   }
   const result = await response.json() as JSONMap;
-  if (result.status?.code && result.status.code !== "OK") throw new Error(`${name}: ${JSON.stringify(result.status)}`);
+  if (result.status?.code && result.status.code !== "OK") throw new Error(`${name}${extra.action?.name ? `/${extra.action.name}` : ""}: ${JSON.stringify(result.status)}`);
   return result;
 }
 

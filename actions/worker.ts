@@ -33,7 +33,7 @@ function rpc(op: string, data: Record<string, unknown> = {}): any {
 function syncFiles(): void {
   const directory = path.join(root, 'output', slug);
   const files: Record<string, string> = {};
-  for (const name of ['feature-inventory.json', 'start-template.json', 'coverage.json', 'capture-checkpoint.json', 'validation-report.json', 'data-manifest.json', 'mongo-audit-test.json']) {
+  for (const name of ['feature-inventory.json', 'start-template.json', 'coverage.json', 'mode-coverage.json', 'capture-checkpoint.json', 'validation-report.json', 'data-manifest.json', 'mongo-audit-test.json']) {
     const file = path.join(directory, name);
     if (fs.existsSync(file)) files[name] = fs.readFileSync(file, 'utf8');
   }
@@ -41,6 +41,11 @@ function syncFiles(): void {
 }
 
 function stopped(): boolean { return stopping || Date.now() >= deadline; }
+function requireProviderAuthorization(): void {
+  if (process.env.OAKS_PROVIDER_AUTHORIZED !== 'true') {
+    throw new Error('真实采集需要服务商书面授权并设置 OAKS_PROVIDER_AUTHORIZED=true');
+  }
+}
 function installDurability(): void {
   installCaptureRuntime({
     pending: () => pending,
@@ -84,7 +89,7 @@ async function main(): Promise<void> {
     throw new Error('采集仅允许在 GitHub-hosted Linux Runner 执行');
   }
   const mode = process.argv[2];
-  if (mode === 'begin') { console.log(JSON.stringify(rpc('begin', { githubToken: process.env.OAKS_GITHUB_TOKEN }))); return; }
+  if (mode === 'begin') { requireProviderAuthorization(); console.log(JSON.stringify(rpc('begin', { githubToken: process.env.OAKS_GITHUB_TOKEN }))); return; }
   if (mode === 'end') { console.log(JSON.stringify(rpc('end'))); return; }
   if (mode === 'status') { console.log(JSON.stringify(rpc('status'))); return; }
   if (mode === 'check') {
@@ -98,6 +103,7 @@ async function main(): Promise<void> {
     return;
   }
   if (mode !== 'capture') throw new Error('未知执行模式');
+  requireProviderAuthorization();
   if (['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'].some(key => process.env[key])) {
     throw new Error('采集 Runner 不允许配置出口代理');
   }
@@ -107,7 +113,8 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({ worker, runnerEnvironment: process.env.RUNNER_ENVIRONMENT, egress }));
   if (!process.env.OAKS_MONGO_URI) throw new Error('缺少受控 Mongo 连接');
   process.env.OAKS_TEST_MONGO_URI = process.env.OAKS_MONGO_URI;
-  process.argv = [process.execPath, __filename, '--rounds', '500', '--target-per-feature', '10'];
+  const quotaArgs = ['--target-per-feature', '10', '--normal-rounds', '100000', '--target-per-mode', '10000'];
+  process.argv = [process.execPath, __filename, '--rounds', '500', ...quotaArgs];
   const { readRegistry } = await import('../catalog-sync');
   const { captureGame } = await import('../oaks');
   const registry = await readRegistry();
@@ -138,7 +145,7 @@ async function main(): Promise<void> {
       try { await captureGame(game); status = 'captured'; }
       finally { console.log = originalLog; console.warn = originalWarn; }
       for (const script of ['validate-data.ts', 'audit-mongo.ts', 'finalize-data.ts']) {
-        const args = ['-r', 'ts-node/register', script, '--game', slug, '--target-per-feature', '10'];
+        const args = ['-r', 'ts-node/register', script, '--game', slug, ...quotaArgs];
         if (script !== 'validate-data.ts') args.push('--target', 'test');
         const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'pipe', timeout: 120_000, env: process.env });
         if (result.status !== 0) throw new Error('正式数据验收失败');

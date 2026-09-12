@@ -6,6 +6,7 @@ import { readRegistry } from "../catalog-sync";
 import { MONGO_COLLECTION, MONGO_URI } from "../config";
 import { numberOption, selectGames, stringOption } from "./cli";
 import { ensureMongoIndexes, sourceRoundHash, upsertMongoRound } from "./mongo-store";
+import { auditModeQuota } from "./mode-target";
 
 export function mongoURI(target: string): string {
   if (target === "local") return process.env.OAKS_LOCAL_MONGO_URI ?? MONGO_URI;
@@ -58,6 +59,8 @@ export async function auditMongo(args: string[]): Promise<Array<Record<string, u
   const games = selectGames(args, registry);
   const target = stringOption(args, "--target", "local");
   const minimum = numberOption(args, "--target-per-feature", 10);
+  const normalRounds = numberOption(args, "--normal-rounds", 0);
+  const targetPerMode = numberOption(args, "--target-per-mode", 0);
   const client = new MongoClient(mongoURI(target));
   const result: Array<Record<string, unknown>> = [];
   await client.connect();
@@ -82,9 +85,11 @@ export async function auditMongo(args: string[]): Promise<Array<Record<string, u
       const normalWin = normal.filter(doc => Number(doc.mul) > 0).length;
       const normalLoss = normal.filter(doc => Number(doc.mul) === 0).length;
       const total = documents.length;
-      const valid = uniqueHash && countsMatch && contentValid && missing.length === 0 && normalWin > 0 && normalLoss > 0;
+      const modeQuota = auditModeQuota(game, documents, normalRounds, targetPerMode);
+      const valid = uniqueHash && countsMatch && contentValid && missing.length === 0 && modeQuota.missing.length === 0 && normalWin > 0 && normalLoss > 0;
       const report = { brand: "3 OAKS", target, gameId: game.gameId, slug: game.slug, dbName: game.dbName, total,
-        sourceCount: source.length, countsMatch, contentValid, uniqueHash, normalWin, normalLoss, featureCounts, missing, valid };
+        sourceCount: source.length, countsMatch, contentValid, uniqueHash, normalWin, normalLoss, featureCounts, missing,
+        modeCounts: modeQuota.counts, modeTargets: modeQuota.targets, modeMissing: modeQuota.missing, valid };
       const reportPath = path.join(__dirname, "..", "output", game.slug, `mongo-audit-${target}.json`);
       const temporary = `${reportPath}.part-${process.pid}`;
       await fs.writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`);

@@ -9,6 +9,9 @@ export interface ValidationSummary {
   coverage: Record<string, number>;
   examples: Record<string, number[]>;
   required: string[];
+  modeCounts?: Record<number, number>;
+  modeTargets?: Record<number, number>;
+  modeMissing?: number[];
 }
 
 export interface FinalizeDocument {
@@ -19,6 +22,7 @@ export interface MongoAuditSummary {
   total: number;
   valid: boolean;
   featureCounts: Record<string, number>;
+  modeCounts?: Record<number, number>;
 }
 
 export function buildDataManifest(
@@ -28,6 +32,7 @@ export function buildDataManifest(
   dataFileSha256: string,
   targetPerFeature: number,
   mongoAudit?: MongoAuditSummary,
+  modeTargets: Record<number, number> = {},
 ): Record<string, unknown> {
   if (validation.invalid || validation.duplicates || validation.sensitiveDocuments) {
     throw new Error(`${game.slug} 数据存在 invalid/duplicate/sensitive`);
@@ -50,6 +55,16 @@ export function buildDataManifest(
   if (mongoAudit && (!mongoAudit.valid || mongoAudit.total !== documents.length)) {
     throw new Error(`${game.slug} MongoDB 回读未通过`);
   }
+  const modeCounts = validation.modeCounts ?? {};
+  const missingModes = Object.entries(modeTargets)
+    .filter(([mode, target]) => Number(modeCounts[Number(mode)] ?? 0) < Number(target))
+    .map(([mode]) => Number(mode));
+  if (missingModes.length || validation.modeMissing?.length) {
+    throw new Error(`${game.slug} 模式配额未达标: ${missingModes.join(",") || validation.modeMissing!.join(",")}`);
+  }
+  if (mongoAudit && Object.entries(modeTargets).some(([mode, target]) => Number(mongoAudit.modeCounts?.[Number(mode)] ?? 0) < Number(target))) {
+    throw new Error(`${game.slug} MongoDB 模式配额回读未通过`);
+  }
   return {
     brand: "3 OAKS",
     gameId: game.gameId,
@@ -60,6 +75,8 @@ export function buildDataManifest(
     required,
     counts: Object.fromEntries(required.map((feature) => [feature, validation.coverage[feature] ?? 0])),
     featureHashes,
+    modeTargets,
+    modeCounts,
     dataFileSha256,
     mongoReadCount: mongoAudit?.total ?? null,
     complete: true,

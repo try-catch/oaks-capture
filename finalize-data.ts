@@ -4,6 +4,7 @@ import path from "node:path";
 import { readRegistry } from "./catalog-sync";
 import { buildDataManifest, FinalizeDocument, MongoAuditSummary, ValidationSummary } from "./src/data-finalizer";
 import { numberOption, selectGames, stringOption } from "./src/cli";
+import { auditModeQuota } from "./src/mode-target";
 
 async function readJSON<T>(filename: string): Promise<T> {
   return JSON.parse(await fs.readFile(filename, "utf8")) as T;
@@ -20,6 +21,8 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const games = selectGames(args, await readRegistry());
   const target = numberOption(args, "--target-per-feature", 10);
+  const normalRounds = numberOption(args, "--normal-rounds", 0);
+  const targetPerMode = numberOption(args, "--target-per-mode", 0);
   const manifests: Record<string, unknown>[] = [];
   for (const game of games) {
     const root = path.join(__dirname, "output", game.slug);
@@ -28,7 +31,8 @@ async function main(): Promise<void> {
     const documents = bytes.toString("utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as FinalizeDocument);
     const validation = await readJSON<ValidationSummary>(path.join(root, "validation-report.json"));
     const mongoAudit = await readJSON<MongoAuditSummary>(path.join(root, `mongo-audit-${stringOption(args, "--target", "test")}.json`));
-    const manifest = buildDataManifest(game, documents, validation, crypto.createHash("sha256").update(bytes).digest("hex"), target, mongoAudit);
+    const modeTargets = auditModeQuota(game, documents as unknown as Array<Record<string, any>>, normalRounds, targetPerMode).targets;
+    const manifest = buildDataManifest(game, documents, validation, crypto.createHash("sha256").update(bytes).digest("hex"), target, mongoAudit, modeTargets);
     await atomicJSON(path.join(root, "data-manifest.json"), { ...manifest, generatedAt: new Date().toISOString() });
     manifests.push(manifest);
     console.log(`[finalize ${manifests.length}/${games.length}] ${game.slug} documents=${documents.length}`);

@@ -35,6 +35,16 @@ test("单个节点按线程数并发，节点数与矩阵一致", () => {
   assert.match(worker, /fork\(__filename, \['thread'\]/);
 });
 
+test("运行结束后链式派发下一轮，不依赖 GitHub 的 cron", () => {
+  // 实测 GitHub 对低活跃公开仓库的 cron 会被合并甚至丢弃：配每小时一次时
+  // 一天只触发 4 次，所以连续性靠 finish 派发下一轮。
+  assert.match(workflow, /actions:\s*write/);
+  assert.match(workflow, /actions\/workflows\/capture\.yml\/dispatches/);
+  assert.match(workflow, /"ref":"main","inputs":\{"mode":"capture"\}/);
+  // prepare 失败不得续跑，避免配置性故障形成无限失败链。
+  assert.match(workflow, /always\(\) && needs\.prepare\.result == 'success'/);
+});
+
 test("同时活跃的官方会话数受限，不能等于线程总数", () => {
   // 实测 107 个并发会话 → 103 个游戏立刻 GAME_REOPENED；6 个会话时成功率 97%。
   assert.match(workflow, /OAKS_MAX_CLAIMS:\s*'6'/);

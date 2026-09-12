@@ -63,7 +63,10 @@ test("丢弃未完成局必须同时清掉请求日志键，否则重新登录�
   const workerSource = fs.readFileSync(path.resolve(__dirname, "..", "actions", "worker.ts"), "utf8");
   assert.match(workerSource, /discardPending: \(\) => \{[\s\S]{0,200}?requestKey = undefined/);
   // 跨运行恢复未完成局必然拿着死会话重放，只恢复已落盘数据。
-  assert.match(workerSource, /if \(pending\) \{ rpc\('pending', \{ value: undefined \}\); pending = undefined; \}/);
+  assert.match(workerSource, /if \(pending\) \{ rpc\('pending', \{ value: null \}\); pending = undefined; \}/);
+  // JSON.stringify 会丢掉 undefined 字段，清空未完成局必须传 null，
+  // 否则协调器取不到 value 抛 KeyError，线程会在 claim 之后直接卡死。
+  assert.doesNotMatch(workerSource, /value: undefined/);
 });
 
 test("worker 拒绝重放已缓存的业务失败响应并输出可诊断原因", () => {

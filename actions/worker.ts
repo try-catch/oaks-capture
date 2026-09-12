@@ -84,7 +84,8 @@ function installDurability(): void {
     savePending: value => { rpc('pending', { value }); pending = value; },
     // 丢弃未完成局时必须一并清掉请求日志键：否则后续请求会复用同一键，
     // 被协调器用旧响应重放（重新登录也会命中缓存，拿到假会话）。
-    discardPending: () => { rpc('pending', { value: undefined }); pending = undefined; requestKey = undefined; },
+    // 注意必须传 null：JSON.stringify 会丢掉 undefined 字段，协调器会因此取不到 value。
+    discardPending: () => { rpc('pending', { value: null }); pending = undefined; requestKey = undefined; },
     requestStep: (id, step) => { requestKey = crypto.createHash('sha256').update(`${slug}:${id}:${step}`).digest('hex'); },
     writeDocument: document => { rpc('append', { document, line: JSON.stringify(document) }); },
     acknowledge: document => { rpc('ack', { hash: document.sourceRoundHash }); pending = undefined; requestKey = undefined; },
@@ -161,7 +162,8 @@ async function runThread(): Promise<void> {
     requestKey = undefined;
     // 官方 demo 会话空闲约 61 秒即被重开，跨运行恢复未完成局必然拿着死会话重放，
     // 只会产生 GAME_REOPENED。因此只恢复已落盘数据，不恢复未完成局。
-    if (pending) { rpc('pending', { value: undefined }); pending = undefined; }
+    if (pending) { rpc('pending', { value: null }); pending = undefined; }
+    console.log(JSON.stringify({ worker, slug, phase: 'claimed', deadline }));
     let status = 'incomplete';
     let reason = '';
     // 原工具日志仅在临时内存处理，公开 Actions 日志只输出计数和状态。

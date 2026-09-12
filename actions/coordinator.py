@@ -216,7 +216,8 @@ class Store:
             names = [slug + '.ndjson', 'feature-inventory.json', 'coverage.json', 'mode-coverage.json', 'capture-checkpoint.json']
             return {'files': {name: (folder / name).read_text() for name in names if (folder / name).exists()}, 'pending': read(private / 'round.json')}
         if op == 'pending':
-            atomic(private / 'round.json', req['value'])
+            # 缺省 value 表示清空未完成局，兼容调用方省略该字段的情况。
+            atomic(private / 'round.json', req.get('value'))
             return {}
         if op == 'files':
             allowed = {'feature-inventory.json', 'start-template.json', 'coverage.json', 'mode-coverage.json', 'validation-report.json', 'data-manifest.json', 'mongo-audit-test.json', 'capture-checkpoint.json'}

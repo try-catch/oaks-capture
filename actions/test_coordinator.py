@@ -241,6 +241,13 @@ class RecoveryTests(unittest.TestCase):
         self.assertNotIn('fixture', self.store.state_path.read_text())
         self.assertTrue((self.store.directory / 'one' / (self.key + '.json')).exists())
 
+    def test_pending_without_value_clears_the_incomplete_round(self):
+        # 调用方省略 value 时必须按“清空未完成局”处理，而不是报错。
+        self.call('pending', value={'id': 'round', 'frames': [{'frame': 1}]})
+        self.assertEqual(self.call('load')['pending']['id'], 'round')
+        self.store.call({'op': 'pending', 'run': '100-1', 'worker': '1', 'slug': 'one'}, check_legacy=False)
+        self.assertIsNone(self.call('load')['pending'])
+
     def test_node_identity_and_retry_after_parsing(self):
         self.assertEqual(node_of('7.3'), '7')
         self.assertEqual(node_of('7'), '7')

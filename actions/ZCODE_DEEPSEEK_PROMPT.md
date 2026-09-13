@@ -5,7 +5,7 @@
 ## 固定边界
 
 1. 官方请求只能由 GitHub-hosted Linux Runner 发出。不得在本机或测试服直接采集，不得使用代理、指定地区、轮换账号或主动轮换出口。
-2. 只允许查询 GitHub Actions、仓库变量、测试服协调器/MongoDB 完成量，以及在满足条件时派发一次现有 `capture.yml`。不得修改代码、取消、重跑或删除 GitHub 运行。
+2. 只允许查询 GitHub Actions、仓库变量、测试服协调器/MongoDB 完成量，在门禁要求时单独补一个缺失索引，以及在满足条件时派发一次现有 `capture.yml`。不得修改代码、取消、重跑或删除 GitHub 运行。
 3. 仓库变量保持 `CAPTURE_ENABLED=true`、`BENCHMARK_ENABLED=false`。正式 workflow 固定最多 6 个活跃游戏/Mongo 写入者；20 个 Runner 只是分散出口和接替故障节点，不能把活跃会话提高到 60。单节点请求间隔 250ms。
 4. `PLAYER_LOCKOUT` 且消息声明 jurisdiction/legal reasons 时属于地区法律限制。记录 Runner 和游戏并通知用户，不得通过更换或指定出口规避。
 5. HTTP 429 必须遵守 `Retry-After`。两个及以上节点同时限速时让协调器全局暂停；单节点达到熔断条件时保留数据、交回租约，不得绕过冷却。

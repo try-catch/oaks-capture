@@ -7,7 +7,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
-from coordinator import CONSERVATIVE_WAIT_MS, Store, atomic, business_error_code, node_of, read, retry_after_ms
+from coordinator import CONSERVATIVE_WAIT_MS, Store, atomic, business_error_code, current_quota_complete, node_of, read, retry_after_ms
 
 
 class RecoveryTests(unittest.TestCase):
@@ -43,6 +43,17 @@ class RecoveryTests(unittest.TestCase):
         state = read(self.store.state_path)
         state['nodeUntil'] = {}
         atomic(self.store.state_path, state)
+
+    def test_old_manifest_cannot_skip_current_mode_quotas(self):
+        old_manifest = {'complete': True, 'documents': 3}
+        old_audit = {'valid': True, 'total': 3}
+        self.assertFalse(current_quota_complete(old_manifest, old_audit))
+        targets = {'0': 100000, '1': 10000}
+        complete = {'modeTargets': targets, 'modeCounts': {'0': 100000, '1': 10000}}
+        audit = {'modeTargets': targets, 'modeCounts': {'0': 100000, '1': 10000}, 'modeMissing': []}
+        self.assertTrue(current_quota_complete(complete, audit))
+        audit['modeCounts']['1'] = 9999
+        self.assertFalse(current_quota_complete(complete, audit))
 
     def test_cross_run_and_worker_exclusion(self):
         with self.assertRaises(ValueError):

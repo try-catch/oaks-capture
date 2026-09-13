@@ -76,6 +76,22 @@ def business_error_code(response):
     return f'HTTP_{status}' if status >= 400 else 'UNKNOWN'
 
 
+def current_quota_complete(manifest, audit):
+    """只接受按当前 10万/1万 模式配额生成的清单，拒绝旧版十条验收结果。"""
+    targets = manifest.get('modeTargets') or {}
+    counts = manifest.get('modeCounts') or {}
+    audit_targets = audit.get('modeTargets') or {}
+    audit_counts = audit.get('modeCounts') or {}
+    if positive_int(targets.get('0'), 0) < 100_000 or targets != audit_targets:
+        return False
+    return all(
+        positive_int(target, 0) > 0
+        and positive_int(counts.get(str(mode)), 0) >= int(target)
+        and positive_int(audit_counts.get(str(mode)), 0) >= int(target)
+        for mode, target in targets.items()
+    ) and not audit.get('modeMissing', ['unknown'])
+
+
 def completed_attempt(run, token):
     if not token or not re.fullmatch(r'[0-9]+-[0-9]+', run):
         return False
@@ -336,7 +352,7 @@ class Store:
                 manifest = read(folder / 'data-manifest.json', {})
                 audit = read(folder / 'mongo-audit-test.json', {})
                 validation = read(folder / 'validation-report.json', {})
-                if manifest.get('complete') is True and audit.get('valid') is True and validation.get('invalid') == 0 and not validation.get('missing', ['unknown']):
+                if manifest.get('complete') is True and audit.get('valid') is True and validation.get('invalid') == 0 and not validation.get('missing', ['unknown']) and current_quota_complete(manifest, audit):
                     state['claims'][slug] = {'status': 'already-accepted'}
                     continue
                 private = self.directory / slug

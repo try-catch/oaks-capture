@@ -72,7 +72,7 @@ test("丢弃未完成局必须同时清掉请求日志键，否则重新登录�
 test("协调走常驻长连接，异常时回退单次调用", () => {
   const channelSource = fs.readFileSync(path.resolve(__dirname, "..", "src", "coordinator-channel.ts"), "utf8");
   // 单次调用要新起 ssh+sudo+python，实测每次 1-2 秒，是一轮三个往返的主要成本。
-  assert.match(worker, /COORDINATOR\} --serve/);
+  assert.match(worker, /coordinator-client\.py/);
   assert.match(worker, /CoordinatorChannel/);
   // 默认启用；显式设为 0 才关闭（numberFromEnv 把 0 当无效值回落默认）。
   assert.match(worker, /process\.env\.OAKS_PERSISTENT_CHANNEL !== '0'/);

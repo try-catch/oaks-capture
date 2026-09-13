@@ -28,10 +28,11 @@ process.on('SIGINT', () => { stopping = true; });
 // 协调通道：常驻模式下在一条 SSH 长连接上按 JSON 行收发，把单次往返从
 // 1-2 秒（新起 ssh+sudo+python）降到毫秒级；异常自动退回单次调用。
 // 每条线程独占一个实例与一条管道，因此管道内永远是单调的请求-响应。
-const COORDINATOR = '/api/api_new/tools/capture-oaks/actions/coordinator.py';
+const COORDINATOR = '/api/api_new/tools/capture-oaks/actions/coordinator-client.py';
 // 默认启用；显式设为 0 才关闭（numberFromEnv 会把 0 当作无效值回落到默认，不能用它）。
 const channel = new CoordinatorChannel({
-  persistent: ['ssh', '-F', process.env.OAKS_SSH_CONFIG!, 'oaks-store', `sudo python3 -u ${COORDINATOR} --serve`],
+  // 客户端把每条 JSON 行转给测试服上的常驻守护进程；守护进程未运行时自己退化为单次调用。
+  persistent: ['ssh', '-F', process.env.OAKS_SSH_CONFIG!, 'oaks-store', `sudo python3 -u ${COORDINATOR}`],
   oneShot: ['ssh', '-F', process.env.OAKS_SSH_CONFIG!, 'oaks-store', `sudo python3 ${COORDINATOR}`],
 }, process.env.OAKS_PERSISTENT_CHANNEL !== '0');
 

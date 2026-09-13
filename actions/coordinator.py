@@ -6,9 +6,11 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 
@@ -91,6 +93,33 @@ def atomic(path, value):
             os.unlink(temporary)
 
 
+def coordinator_root():
+    """协调器根目录：默认仓库根，OAKS_COORDINATOR_ROOT 供测试与异地部署覆盖。"""
+    return Path(os.environ.get('OAKS_COORDINATOR_ROOT') or Path(__file__).resolve().parent.parent)
+
+
+def forward_to_daemon(request):
+    """把请求转给常驻守护进程，避免与它同时写状态。"""
+    path = coordinator_root() / 'output' / '.actions' / 'coordinator.sock'
+    if not path.exists():
+        raise ValueError('协调守护进程未运行')
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(str(path))
+        client.sendall((json.dumps(request) + '\n').encode('utf-8'))
+        data = b''
+        while b'\n' not in data:
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+    if not data:
+        raise ValueError('协调守护进程未返回响应')
+    response = json.loads(data.split(b'\n')[0])
+    if not response.get('ok'):
+        raise ValueError(response.get('error') or '协调守护进程拒绝操作')
+    return response['result']
+
+
 def read(path, default=None):
     try:
         return json.loads(path.read_text())
@@ -99,11 +128,23 @@ def read(path, default=None):
 
 
 class Store:
-    def __init__(self, root):
+    def __init__(self, root, memory=None):
         self.root = Path(root)
         self.directory = self.root / 'output' / '.actions'
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.state_path = self.directory / 'queue.json'
+        # 常驻守护进程把状态放在内存里，请求之间不再读写状态文件，
+        # 也不再为每个请求 fsync——这是 3-4 天工期所需的吞吐来源。
+        self.memory = memory
+        self.lock = threading.Lock() if memory is not None else None
+        # 常驻模式下请求日志只放内存：不再为每个请求写文件 + fsync。
+        self.journals = {}
+
+    def load(self):
+        return read(self.state_path, {'owner': None, 'until': 0, 'next': 0, 'rateCount': 0, 'permit': None})
+
+    def persist(self, state):
+        atomic(self.state_path, state)
 
     def lock_path(self, request):
         """按操作选锁：只有会改共享队列状态的操作才需要全局锁。
@@ -118,14 +159,39 @@ class Store:
         return self.directory / 'queue.lock'
 
     def call(self, request, check_legacy=True):
-        with self.lock_path(request).open('a') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            state = read(self.state_path, {'owner': None, 'until': 0, 'next': 0, 'rateCount': 0, 'permit': None})
-            result = self.execute(state, request, check_legacy)
-            # 只读与纯落盘操作不改队列状态，跳过状态回写可以省掉每轮的 fsync 开销。
-            if request.get('op') not in READ_ONLY_OPS:
-                atomic(self.state_path, state)
-            return result
+        if self.lock is not None:
+            # 常驻模式：内存状态 + 进程内互斥，不做逐请求持久化。
+            with self.lock:
+                return self.execute(self.memory, request, check_legacy)
+        try:
+            with self.lock_path(request).open('a') as lock:
+                # 非阻塞取锁：守护进程在跑时它持有 queue.lock，这里改走转发，
+                # 保证任何时刻只有一个状态写者。
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                state = read(self.state_path, {'owner': None, 'until': 0, 'next': 0, 'rateCount': 0, 'permit': None})
+                result = self.execute(state, request, check_legacy)
+                # 只读与纯落盘操作不改队列状态，跳过状态回写可以省掉每轮的 fsync 开销。
+                if request.get('op') not in READ_ONLY_OPS:
+                    atomic(self.state_path, state)
+                return result
+        except BlockingIOError:
+            return forward_to_daemon(request)
+
+    def journal_read(self, private, key):
+        """请求日志：常驻模式走内存，单次调用模式仍落盘。"""
+        if self.memory is not None:
+            return self.journals.get(key)
+        return read(private / (key + '.json'))
+
+    def journal_write(self, private, key, entry):
+        if self.memory is not None:
+            self.journals[key] = entry
+            # 只保留在飞与最近若干条，避免长跑把内存吃光。
+            if len(self.journals) > 20000:
+                for stale in list(self.journals)[:10000]:
+                    self.journals.pop(stale, None)
+            return
+        atomic(private / (key + '.json'), entry)
 
     def hashes(self, folder, private, slug):
         """按 sourceRoundHash 去重用的索引。
@@ -148,7 +214,12 @@ class Store:
         """旧采集容器检查带 TTL：原来每个官方请求都跑一次 docker inspect（0.22 秒）。"""
         if now - state.get('legacyCheckedAt', 0) < LEGACY_CHECK_TTL_MS:
             return
-        old = subprocess.check_output(['docker', 'inspect', '--format', '{{.State.Running}}', 'oaks-capture'], text=True).strip()
+        try:
+            old = subprocess.check_output(['docker', 'inspect', '--format', '{{.State.Running}}', 'oaks-capture'],
+                                          text=True, stderr=subprocess.DEVNULL).strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            # 容器不存在（或本机没有 docker）等同于“旧采集容器未运行”。
+            old = 'false'
         if old != 'false':
             raise ValueError('检测到旧采集容器运行，拒绝官方请求')
         state['legacyCheckedAt'] = now
@@ -307,9 +378,8 @@ class Store:
         key = str(req.get('key', ''))
         if not re.fullmatch(r'[a-f0-9]{64}', key):
             raise ValueError('非法请求日志标识')
-        journal = private / (key + '.json')
         if op == 'permit':
-            previous = read(journal)
+            previous = self.journal_read(private, key)
             if previous:
                 # 只有调用方确认业务成功的响应才允许重放；官方会在 200 里返回业务失败，
                 # 重放它会让这一局永久卡死，因此旧版本没有 usable 标记的记录一律重新请求。
@@ -343,19 +413,17 @@ class Store:
             state['permits'][key] = {'key': key, 'slug': slug, 'worker': worker, 'node': node, 'at': now}
             waiters.remove(current)
             state['nodeUntil'][node] = max(state['nodeUntil'].get(node, 0), now + state['topology']['nodeMs'])
-            if previous:
-                atomic(private / (key + '-' + str(int(now)) + '-history.json'), previous)
-            atomic(journal, {'request': req['request'], 'at': now, 'run': run, 'runner': req.get('runner', {})})
+            self.journal_write(private, key, {'request': req['request'], 'at': now, 'run': run, 'runner': req.get('runner', {})})
             return {'granted': True}
         if op == 'response':
             permit = state['permits'].get(key)
             if not permit or (permit.get('slug'), permit.get('worker')) != (slug, worker):
                 raise ValueError('响应不匹配当前请求锁')
             del state['permits'][key]
-            entry = read(journal)
+            entry = self.journal_read(private, key) or {}
             entry['response'] = req['response']
             entry['usable'] = bool(req.get('usable', 200 <= req['response']['status'] < 300))
-            atomic(journal, entry)
+            self.journal_write(private, key, entry)
             if req['response']['status'] == 429:
                 state['rateCount'] += 1
                 wait = max(10_000, retry_after_ms(req['response'].get('headers'), now))
@@ -399,7 +467,7 @@ def serve(store):
 
 
 if __name__ == '__main__':
-    root = Path(__file__).resolve().parent.parent
+    root = coordinator_root()
     if '--serve' in sys.argv:
         serve(Store(root))
         sys.exit(0)

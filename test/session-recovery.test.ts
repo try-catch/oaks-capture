@@ -72,7 +72,9 @@ test("丢弃未完成局必须同时清掉请求日志键，否则重新登录�
 test("协调走常驻长连接，异常时回退单次调用", () => {
   // 单次调用要新起 ssh+sudo+python，实测每次 1-2 秒，是一轮三个往返的主要成本。
   assert.match(worker, /COORDINATOR\} --serve/);
-  assert.match(worker, /OAKS_PERSISTENT_CHANNEL/);
+  // numberFromEnv 把 0 当无效值回落默认，开关必须用字符串比较。
+  assert.match(worker, /process\.env\.OAKS_PERSISTENT_CHANNEL !== '0'/);
+  assert.doesNotMatch(worker, /numberFromEnv\('OAKS_PERSISTENT_CHANNEL'/);
   assert.match(worker, /class CoordinatorChannel/);
   // 阻塞读需要把管道设为阻塞模式，否则 readSync 会抛 EAGAIN。
   assert.match(worker, /setBlocking\(true\)/);

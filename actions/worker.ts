@@ -85,7 +85,8 @@ class CoordinatorChannel {
   }
 }
 
-const channel = new CoordinatorChannel(numberFromEnv('OAKS_PERSISTENT_CHANNEL', 1) === 1);
+// 默认启用；显式设为 0 才关闭（numberFromEnv 会把 0 当作无效值回落到默认，不能用它）。
+const channel = new CoordinatorChannel(process.env.OAKS_PERSISTENT_CHANNEL !== '0');
 
 function rpc(op: string, data: Record<string, unknown> = {}): any {
   const payload = JSON.stringify({ op, run, worker, node, slug, runner: { name: process.env.RUNNER_NAME, environment: process.env.RUNNER_ENVIRONMENT, egress }, ...data });

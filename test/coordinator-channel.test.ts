@@ -42,6 +42,20 @@ test("显式关闭常驻模式时走单次调用，仍然可用", () => {
   assert.equal(response.result.echo, 7);
 });
 
+test("常驻进程不响应时必须在超时内回退，不能永久卡住线程", () => {
+  // 这正是线上的事故形态：阻塞读没有超时，对端不响应就永久卡在 readSync。
+  const silent = ["python3", "-u", "-c", "import time; time.sleep(60)"];
+  const channel = new CoordinatorChannel({ persistent: silent, oneShot: ECHO }, true, 300);
+  try {
+    const started = Date.now();
+    const response = channel.call(JSON.stringify({ n: 11 }));
+    const elapsed = Date.now() - started;
+    assert.equal(response.ok, true);
+    assert.equal(response.result.echo, 11);
+    assert.ok(elapsed < 3000, `应在超时后立即回退，实际 ${elapsed}ms`);
+  } finally { channel.close(); }
+});
+
 test("常驻进程不可用时回退到单次调用，不抛错也不卡死", () => {
   const broken = ["python3", "-c", "import sys; sys.exit(3)"];
   const channel = new CoordinatorChannel({ persistent: broken, oneShot: ECHO }, true);

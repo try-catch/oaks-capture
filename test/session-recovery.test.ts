@@ -80,7 +80,10 @@ test("协调走常驻长连接，异常时回退单次调用", () => {
   // 阻塞读写必须用 handle 上的 fd：子进程管道的 .fd 是 undefined（实测踩过，
   // 结果每次都静默回退，还会留下一堆半死的 ssh 进程把 sshd 拖垮）。
   assert.match(channelSource, /_handle\?\.fd/);
-  assert.match(channelSource, /setBlocking\(true\)/);
+  // 不能设置阻塞模式：阻塞读没有超时，对端不响应会永久卡住整条线程（实测踩过）。
+  assert.doesNotMatch(channelSource, /setBlocking/);
+  assert.match(channelSource, /EAGAIN/);
+  assert.match(channelSource, /协调通道读取超时/);
   // 通道任何异常都必须退回单次调用，且单次调用仍然校验 ok。
   assert.match(channelSource, /return this\.oneShot\(payload\)/);
   assert.match(worker, /协调器拒绝操作/);

@@ -14,6 +14,10 @@ export interface ChannelResponse {
   error?: string;
 }
 
+// 非阻塞管道上的短等待：用 Atomics.wait 同步睡眠，避免忙等占满 CPU。
+const SLEEP = new Int32Array(new SharedArrayBuffer(4));
+function sleepBriefly(): void { Atomics.wait(SLEEP, 0, 0, 2); }
+
 /**
  * 协调通道。常驻模式下在一条 ssh 长连接上按 JSON 行收发，把单次往返从
  * 1-2 秒（新起 ssh+sudo+python）降到毫秒级；任何异常都退回单次调用。
@@ -48,12 +52,8 @@ export class CoordinatorChannel {
 
   private start(): void {
     const [command, ...args] = this.commands.persistent;
+    // 管道保持非阻塞：阻塞读没有超时，一旦对端不响应会永久卡住整条线程。
     const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'inherit'] });
-    // 阻塞读写要求管道处于阻塞模式，否则 readSync 会抛 EAGAIN。
-    for (const stream of [child.stdout, child.stdin]) {
-      const handle = (stream as unknown as { _handle?: { setBlocking?: (value: boolean) => void } })?._handle;
-      if (handle?.setBlocking) handle.setBlocking(true);
-    }
     child.on('exit', () => { if (this.child === child) this.child = undefined; });
     this.child = child;
     this.buffer = '';
@@ -65,12 +65,28 @@ export class CoordinatorChannel {
     const stdin = (child.stdin as unknown as { _handle?: { fd?: number } })?._handle?.fd;
     const stdout = (child.stdout as unknown as { _handle?: { fd?: number } })?._handle?.fd;
     if (typeof stdin !== 'number' || typeof stdout !== 'number') throw new Error('协调通道缺少管道描述符');
-    fs.writeSync(stdin, payload + '\n');
+    this.write(stdin, payload);
     return this.read(stdout);
+  }
+
+  private write(stdin: number, payload: string): void {
+    const data = Buffer.from(payload + '\n', 'utf8');
+    const deadline = Date.now() + this.timeoutMs;
+    let offset = 0;
+    while (offset < data.length) {
+      try {
+        offset += fs.writeSync(stdin, data, offset, data.length - offset);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EAGAIN') throw error;
+        if (Date.now() > deadline) throw new Error('协调通道写入超时');
+        sleepBriefly();
+      }
+    }
   }
 
   private read(stdout: number): ChannelResponse {
     const chunk = Buffer.alloc(256 * 1024);
+    const deadline = Date.now() + this.timeoutMs;
     while (true) {
       const newline = this.buffer.indexOf('\n');
       if (newline >= 0) {
@@ -78,7 +94,15 @@ export class CoordinatorChannel {
         this.buffer = this.buffer.slice(newline + 1);
         return JSON.parse(line) as ChannelResponse;
       }
-      const read = fs.readSync(stdout, chunk, 0, chunk.length, null);
+      let read: number;
+      try {
+        read = fs.readSync(stdout, chunk, 0, chunk.length, null);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EAGAIN') throw error;
+        if (Date.now() > deadline) throw new Error('协调通道读取超时');
+        sleepBriefly();
+        continue;
+      }
       if (read === 0) throw new Error('协调通道已关闭');
       this.buffer += chunk.subarray(0, read).toString('utf8');
     }

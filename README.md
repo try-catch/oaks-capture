@@ -2,11 +2,13 @@
 
 公共仓库仅包含采集代码、测试和目录定义。NDJSON、凭据、原始响应及未完成局只保存在测试服，禁止上传 artifact。
 
-采集 workflow 位于 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。先用 `workflow_dispatch / check` 验证，通过后设置仓库变量 `CAPTURE_ENABLED=true`。正式采集每小时由 cron 触发一次，也可手工选择 `capture`；使用 20 个 GitHub-hosted Linux 节点，每个节点开启 8 个线程，每轮共享 45 分钟预算。只保留 cron 这一种自动触发方式，不使用 push 或结束后的链式派发；单并发组最多保留一个运行和一个等待任务。
+采集 workflow 位于 `actions/workflow.yml`，发布为 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。先用 `workflow_dispatch / check` 验证，通过后设置仓库变量 `CAPTURE_ENABLED=true`。正式采集由外部监督器在健康门禁通过后派发 `capture`：workflow 本身只有 `workflow_dispatch`，不使用 push、cron 或结束后的链式派发。使用 20 个 GitHub-hosted Linux 节点，每轮共享 45 分钟预算；单并发组最多保留一个运行和一个等待任务。
 
-`workflow_dispatch / benchmark` 用于确定官方稳定会话上限。它只接受 6、10、20、40、60 五档 `max_claims`，每档最多运行 15 分钟并照常保存有效数据；必须逐档执行并根据成功局数、`GAME_REOPENED`、429 和熔断节点决定是否继续，不能跳档。测试期间设置 `BENCHMARK_ENABLED=true` 会阻止定时正式采集；结束后把最高稳定档写入 `OAKS_STABLE_MAX_CLAIMS` 并关闭测试开关。
+`workflow_dispatch / benchmark` 用于确定官方稳定会话上限。它只调整单节点请求间隔（250/200ms）和本轮预算，每档最多运行 15 分钟并照常保存有效数据；必须逐档、单变量测试，并根据实际新增数据、业务错误、429 和熔断节点决定是否继续。**benchmark 不能提高并发**：`max_claims` 输入已移除，`OAKS_MAX_CLAIMS` 是 workflow 里的字面量 6，任何派发参数都无法放大它。测试期间设置 `BENCHMARK_ENABLED=true` 会阻止定时正式采集。
 
-并发预算由协调器统一发放：`OAKS_THREADS × OAKS_NODES = 160` 个线程可以同时持有请求许可，但**同时活跃的官方游戏会话数受 `OAKS_MAX_CLAIMS` 限制（默认 6）**。实测把会话数开到 107 时，103 个游戏在第一次 `play` 就返回 `GAME_REOPENED`（176 次请求里 103 次失败），一轮只拿到 73 局；而 6 个会话时历史成功率为 97%（7643 次请求 7400 次 OK）。因此线程数不等于并发会话数，不要用提高线程数来提速。
+并发预算由协调器统一发放。**每节点实际 fork 的子进程数由 `activeThreads()` 收敛：`min(OAKS_THREADS, ceil(OAKS_MAX_CLAIMS / OAKS_NODES))`**，因此 20 节点 × 6 会话时每节点 1 个，全局共 20 个子进程与 20 条常驻 SSH 控制通道。`OAKS_THREADS: '8'` 只是与服务商书面授权一致的上限，不是每节点要起的进程数；旧版直接按它 fork 会在 20 节点上产生 160 条常驻通道，是必须避免的回归。**同时活跃的官方游戏会话数受 `OAKS_MAX_CLAIMS` 硬限制为 6**。实测把会话数开到 107 时，103 个游戏在第一次 `play` 就返回 `GAME_REOPENED`（176 次请求里 103 次失败），一轮只拿到 73 局；而 6 个会话时历史成功率为 97%（7643 次请求 7400 次 OK）。因此线程数不等于并发会话数，不要用提高线程数来提速。
+
+未拿到租约的节点在满额时按指数退避等待：`CLAIM_WAIT_BASE_MS` 1500 毫秒起、逐次翻倍、上限 `CLAIM_WAIT_MAX_MS` 30 秒，客户端原样遵守。稳定态下空闲节点几乎不再产生 claim 流量；固定 3 秒轮询会让 14 个空闲节点形成约 5 次/秒的空转 claim（各带一次 SSH 往返），属于控制面风暴，不得改回。`status` 返回的 `claimBackoff` 汇总了正在退避的 worker 数与最大尝试次数，可用于确认控制面没有退化。
 
 按 6 个活跃会话、每个会话 1 秒节奏计算，理论吞吐约 6 局/秒，1185 万局仍需要约 23 天连续运行，实际还受响应时间影响。想要更短的工期必须提高 `OAKS_MAX_CLAIMS`，而这需要先向服务商确认 demo 后端允许的并发会话数；在没有确认之前不要调高它。同屏线程数和节点数同样必须与服务商书面授权允许的并发一致。
 
@@ -14,7 +16,7 @@
 
 限速分两种反应。单个出口被限速时，只有该出口按官方 `Retry-After` 退避，其它出口继续工作。同一窗口（120 秒）内有 2 个及以上出口都被限速，说明是服务商整体限制，所有节点一起暂停；该截止时间持久化在 `output/.actions/queue.json`，后续运行继续遵守。
 
-单节点熔断：8 线程节点内至少 4 个线程触发官方限速时，判定该出口已被封控。协调器立即熔断该节点、交回它未完成的游戏租约，被熔断线程的后续落盘和确认会被拒绝。已写入测试服的数据全部保留；其它未限速节点继续工作，下一次运行使用新的 GitHub Runner，并继续遵守已记录的 `Retry-After` 或全局暂停。
+单节点熔断：同一节点内触发过官方限速的线程数达到 `OAKS_THROTTLE_LIMIT`（默认 4，实际取 `min(OAKS_THROTTLE_LIMIT, ceil(threads / 2))`；收敛到单线程后一次限速即熔断）时，判定该出口已被封控。协调器立即熔断该节点、交回它未完成的游戏租约，被熔断线程的后续落盘和确认会被拒绝。已写入测试服的数据全部保留；其它未限速节点继续工作，下一次运行使用新的 GitHub Runner，并继续遵守已记录的 `Retry-After` 或全局暂停。
 
 会话恢复：官方把业务结果放在 HTTP 200 响应的 `status.code` 里，`GAME_REOPENED` 这类码表示当前会话已被重开。实测 7643 次请求里有 94 次是 `GAME_REOPENED`、19 次 `SERVER_ERROR`，属于正常运营事件，不是限速。出现这类码时只作废当前这一局（丢弃未完成帧）并重新登录，不再让整个游戏失败；只有结果未知的请求才继续走“隔离、禁止自动重放”的人工核实路径。协调器只重放调用方确认为业务成功的响应，业务失败的 200 会被重新请求，避免某一局被永久卡死。
 

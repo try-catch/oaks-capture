@@ -322,6 +322,11 @@ class Store:
                 return {'wait': min(30_000, state['until'] - now), 'deadline': state['deadline']}
             if sum(claim.get('status') == 'running' for claim in state['claims'].values()) >= state['topology']['maxClaims']:
                 return {'wait': 3000, 'deadline': state['deadline']}
+            # 把会话均匀铺到 Runner 出口，避免先启动的单个节点抢走 8 个游戏，
+            # 导致其它 19 个节点空等且所有请求挤在同一节点间隔里。
+            per_node = max(1, (state['topology']['maxClaims'] + state['topology']['nodes'] - 1) // state['topology']['nodes'])
+            if sum(claim.get('status') == 'running' and claim.get('node') == node for claim in state['claims'].values()) >= per_node:
+                return {'wait': 3000, 'deadline': state['deadline']}
             for slug in state['games']:
                 claim = state['claims'].get(slug)
                 # 熔断节点释放出的游戏立刻可以重新认领；其余已认领游戏在本轮内不重复认领。

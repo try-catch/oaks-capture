@@ -174,12 +174,23 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(started['topology']['maxInFlight'], 160)
         self.assertEqual(started['topology']['throttleLimit'], 7)
         self.assertEqual(self.call('status')['topology']['nodes'], 20)
-        # 授权并发内的多个出口可以同时持有请求许可。
+        # 高于节点数的会话预算允许同一出口持有多个游戏。
         for number in range(3):
             slug = self.store.call({'op': 'claim', 'run': '100-1', 'worker': f'1.{number}'}, check_legacy=False)['slug']
             self.clear_node_backoff()
             self.assertTrue(self.permit(f'1.{number}', slug, hashlib.sha256(str(number).encode()).hexdigest())['granted'])
         self.assertEqual(self.call('status')['permits'], 3)
+
+    def test_claims_are_spread_across_runner_nodes(self):
+        self.expand_registry(20)
+        self.call('end')
+        self.call('begin', threads=8, nodes=20, maxInFlight=160, maxClaims=10)
+        first = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.0'}, check_legacy=False)
+        same_node = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.1'}, check_legacy=False)
+        other_node = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2.0'}, check_legacy=False)
+        self.assertIn('slug', first)
+        self.assertEqual(same_node['wait'], 3000)
+        self.assertIn('slug', other_node)
 
     def test_per_node_request_interval_and_reject_report_path_escape(self):
         self.call('permit', key=self.key, request={})

@@ -25,6 +25,10 @@ GLOBAL_LIMIT_WINDOW_MS = 120_000
 CONSERVATIVE_WAIT_MS = 60_000
 # 线程身份为 <节点>.<线程>，节点身份用于出口熔断，线程身份用于游戏租约。
 THREAD_ID = re.compile(r'([0-9]+)\.([0-9]+)')
+# 旧采集容器检查的缓存时长：不必每个官方请求都跑一次 docker inspect。
+LEGACY_CHECK_TTL_MS = 300_000
+# 这些操作不改队列状态，跳过状态回写。
+READ_ONLY_OPS = {'status', 'load', 'pending', 'files', 'append', 'ack'}
 
 
 def node_of(worker):
@@ -104,8 +108,36 @@ class Store:
             fcntl.flock(lock, fcntl.LOCK_EX)
             state = read(self.state_path, {'owner': None, 'until': 0, 'next': 0, 'rateCount': 0, 'permit': None})
             result = self.execute(state, request, check_legacy)
-            atomic(self.state_path, state)
+            # 只读与纯落盘操作不改队列状态，跳过状态回写可以省掉每轮的 fsync 开销。
+            if request.get('op') not in READ_ONLY_OPS:
+                atomic(self.state_path, state)
             return result
+
+    def hashes(self, folder, private, slug):
+        """按 sourceRoundHash 去重用的索引。
+
+        原来每轮都要把整个 NDJSON 逐行 json.loads 扫一遍（1228 行约 0.72 秒，
+        且随文件增长），这里用只追加的纯文本索引把去重降到一次读+集合判断。
+        """
+        path = private / 'hashes.txt'
+        if not path.exists():
+            seeded = []
+            target = folder / (slug + '.ndjson')
+            if target.exists():
+                for line in target.read_text().splitlines():
+                    try: seeded.append(json.loads(line)['sourceRoundHash'])
+                    except Exception: pass
+            path.write_text(''.join(h + '\n' for h in seeded))
+        return set(path.read_text().split())
+
+    def check_legacy_container(self, state, now):
+        """旧采集容器检查带 TTL：原来每个官方请求都跑一次 docker inspect（0.22 秒）。"""
+        if now - state.get('legacyCheckedAt', 0) < LEGACY_CHECK_TTL_MS:
+            return
+        old = subprocess.check_output(['docker', 'inspect', '--format', '{{.State.Running}}', 'oaks-capture'], text=True).strip()
+        if old != 'false':
+            raise ValueError('检测到旧采集容器运行，拒绝官方请求')
+        state['legacyCheckedAt'] = now
 
     def release_node(self, state, node):
         """熔断节点：交回它未完成的租约，让其它节点立刻接手同一批游戏。
@@ -138,9 +170,7 @@ class Store:
             raise ValueError('非法运行标识')
         if op == 'begin':
             if check_legacy:
-                old = subprocess.check_output(['docker', 'inspect', '--format', '{{.State.Running}}', 'oaks-capture'], text=True).strip()
-                if old != 'false':
-                    raise ValueError('旧采集容器未停止')
+                self.check_legacy_container(state, now)
             if state['owner']:
                 if not completed_attempt(state['owner'], req.get('githubToken', '')):
                     raise ValueError('存在未释放的跨环境队列锁，需要核实旧 Actions 运行状态')
@@ -231,11 +261,10 @@ class Store:
             if doc.get('game') != slug or not re.fullmatch('[a-f0-9]{64}', doc.get('sourceRoundHash', '')):
                 raise ValueError('非法采集数据标识')
             target = folder / (slug + '.ndjson')
+            known = self.hashes(folder, private, slug)
             # 游戏租约保证单写；再次提交同一局为幂等操作。
-            if target.exists():
-                for line in target.read_text().splitlines():
-                    if json.loads(line)['sourceRoundHash'] == doc['sourceRoundHash']:
-                        return {'duplicate': True}
+            if doc['sourceRoundHash'] in known:
+                return {'duplicate': True}
             with target.open('a') as stream:
                 line = req.get('line', json.dumps(doc, ensure_ascii=False))
                 if '\n' in line or json.loads(line) != doc:
@@ -243,14 +272,15 @@ class Store:
                 stream.write(line + '\n')
                 stream.flush()
                 os.fsync(stream.fileno())
+            with (private / 'hashes.txt').open('a') as index:
+                index.write(doc['sourceRoundHash'] + '\n')
             return {'written': True}
         if op == 'ack':
             committed = req['hash']
-            target = folder / (slug + '.ndjson')
-            if not target.exists() or not any(json.loads(line).get('sourceRoundHash') == committed for line in target.read_text().splitlines()):
+            if committed not in self.hashes(folder, private, slug):
                 raise ValueError('NDJSON 尚未落盘，拒绝推进恢复点')
             # 调用方已收到 Mongo acknowledged 写入确认，才推进恢复点。
-            atomic(private / 'committed.json', {'sourceRoundHash': req['hash'], 'run': run, 'at': now})
+            atomic(private / 'committed.json', {'sourceRoundHash': committed, 'run': run, 'at': now})
             atomic(private / 'round.json', None)
             return {}
         if op == 'done':
@@ -296,9 +326,7 @@ class Store:
                     return {'wait': max(50, ready - now)}
                 return {'wait': 500}
             if check_legacy:
-                old = subprocess.check_output(['docker', 'inspect', '--format', '{{.State.Running}}', 'oaks-capture'], text=True).strip()
-                if old != 'false':
-                    raise ValueError('检测到旧采集容器运行，拒绝官方请求')
+                self.check_legacy_container(state, now)
             state['permits'][key] = {'key': key, 'slug': slug, 'worker': worker, 'node': node, 'at': now}
             waiters.remove(current)
             state['nodeUntil'][node] = max(state['nodeUntil'].get(node, 0), now + state['topology']['nodeMs'])

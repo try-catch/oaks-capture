@@ -81,11 +81,12 @@ function reasonOf(error: unknown): string {
 function installDurability(): void {
   installCaptureRuntime({
     pending: () => pending,
-    savePending: value => { rpc('pending', { value }); pending = value; },
+    // 未完成局只在进程内保留：跨运行恢复已被移除，服务端 round.json 不再参与恢复。
+    // 每轮省掉一次 SSH 往返（实测单次约 0.5-1 秒），这是每轮固定开销的大头之一。
+    savePending: value => { pending = value; },
     // 丢弃未完成局时必须一并清掉请求日志键：否则后续请求会复用同一键，
     // 被协调器用旧响应重放（重新登录也会命中缓存，拿到假会话）。
-    // 注意必须传 null：JSON.stringify 会丢掉 undefined 字段，协调器会因此取不到 value。
-    discardPending: () => { rpc('pending', { value: null }); pending = undefined; requestKey = undefined; },
+    discardPending: () => { pending = undefined; requestKey = undefined; },
     requestStep: (id, step) => { requestKey = crypto.createHash('sha256').update(`${slug}:${id}:${step}`).digest('hex'); },
     writeDocument: document => { rpc('append', { document, line: JSON.stringify(document) }); },
     acknowledge: document => { rpc('ack', { hash: document.sourceRoundHash }); pending = undefined; requestKey = undefined; },
@@ -158,11 +159,8 @@ async function runThread(): Promise<void> {
     const directory = path.join(root, 'output', slug);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     for (const [name, value] of Object.entries(restored.files)) fs.writeFileSync(path.join(directory, name), String(value), { mode: 0o600 });
-    pending = restored.pending ?? undefined;
+    pending = undefined;
     requestKey = undefined;
-    // 官方 demo 会话空闲约 61 秒即被重开，跨运行恢复未完成局必然拿着死会话重放，
-    // 只会产生 GAME_REOPENED。因此只恢复已落盘数据，不恢复未完成局。
-    if (pending) { rpc('pending', { value: null }); pending = undefined; }
     console.log(JSON.stringify({ worker, slug, phase: 'claimed', deadline }));
     let status = 'incomplete';
     let reason = '';

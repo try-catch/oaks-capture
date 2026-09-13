@@ -62,10 +62,10 @@ test("协调器只重放可用响应，业务失败的 200 必须重新请求", 
 test("丢弃未完成局必须同时清掉请求日志键，否则重新登录会被缓存重放", () => {
   const workerSource = fs.readFileSync(path.resolve(__dirname, "..", "actions", "worker.ts"), "utf8");
   assert.match(workerSource, /discardPending: \(\) => \{[\s\S]{0,200}?requestKey = undefined/);
-  // 跨运行恢复未完成局必然拿着死会话重放，只恢复已落盘数据。
-  assert.match(workerSource, /if \(pending\) \{ rpc\('pending', \{ value: null \}\); pending = undefined; \}/);
-  // JSON.stringify 会丢掉 undefined 字段，清空未完成局必须传 null，
-  // 否则协调器取不到 value 抛 KeyError，线程会在 claim 之后直接卡死。
+  // 未完成局只在进程内保留：跨运行恢复必然拿死会话重放（会话空闲约 61 秒即被重开）。
+  assert.match(workerSource, /pending = undefined;\s*\n\s*requestKey = undefined;/);
+  assert.doesNotMatch(workerSource, /restored\.pending/);
+  // JSON.stringify 会丢掉 undefined 字段，清空未完成局曾经因此让线程抛 KeyError 卡死。
   assert.doesNotMatch(workerSource, /value: undefined/);
 });
 

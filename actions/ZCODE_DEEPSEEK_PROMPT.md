@@ -14,11 +14,12 @@
 
 1. 查询仓库最近运行。只要存在 `queued`、`pending`、`waiting` 或 `in_progress`，就不派发并保持安静。
 2. 无在途运行时，读取最近完成轮的 conclusion、`documentsWritten`、`responses`、`http429`、`businessErrors` 和 `halted`，并检查 MongoDB 配额完成量。
-3. 如果 107 款游戏尚未全部达到普通模式 100000 条、代码定义的每个购买模式和加注模式 10000 条，且上一轮健康，则派发一次：
+3. 如果 107 款游戏尚未全部达到普通模式 100000 条、代码定义的每个购买模式和加注模式 10000 条，且上一轮没有系统性故障，则派发一次：
 
    `gh workflow run capture.yml -R try-catch/oaks-capture -f mode=capture`
 
-4. 如果上一轮失败、出现 HTTP 429、熔断、地区限制、大面积业务错误或吞吐显著下降，不派发，通知用户具体运行、指标和受影响游戏。
-5. 全部配额达标后不再派发；确认 `validate-data.ts`、测试服 Mongo 审计和 `finalize-data.ts --target test` 通过，再通知完成。
+4. 单个游戏的校验失败、HTTP 5xx 或结果未知请求不能拖停其它游戏。保持该请求隔离并报告游戏；只要本轮有有效新增、HTTP 429 和熔断均为 0、没有地区限制，且失败游戏不超过本轮租约的 10%，可以继续派发。相同游戏连续两轮失败时明确通知用户，但其它游戏继续采集。
+5. 如果出现 HTTP 429、熔断、地区限制、超过 10% 游戏失败、没有有效新增或吞吐显著下降，不派发，通知用户具体运行、指标和受影响游戏。
+6. 全部配额达标后不再派发；确认 `validate-data.ts`、测试服 Mongo 审计和 `finalize-data.ts --target test` 通过，再通知完成。
 
 正常运行或等待中的状态不通知。不要打印 GitHub token、SSH 密钥、Mongo URI、原始响应或任何会话字段，不要上传数据到 GitHub artifact。

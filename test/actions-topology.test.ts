@@ -15,8 +15,9 @@ test("Runner 恢复期间只保留手工 check/capture 入口", () => {
 });
 
 test("采集严格服从 prepare 输出并保持单队列", () => {
-  assert.match(workflow, /if: needs\.prepare\.outputs\.capture == 'true'/);
-  assert.match(workflow, /if: always\(\) && needs\.prepare\.outputs\.capture == 'true'/);
+  assert.match(workflow, /echo 'capture=enabled'/);
+  assert.match(workflow, /if: needs\.prepare\.outputs\.capture == 'enabled'/);
+  assert.match(workflow, /if: always\(\) && needs\.prepare\.outputs\.capture == 'enabled'/);
   assert.match(workflow, /group: oaks-official-single-queue/);
   assert.match(workflow, /cancel-in-progress: false/);
   assert.match(workflow, /if: vars\.CAPTURE_ENABLED == 'true' && inputs\.mode == 'capture'/);

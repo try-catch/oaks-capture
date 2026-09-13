@@ -62,10 +62,10 @@ jobs:
           OAKS_GITHUB_TOKEN: ${{ github.token }}
         run: |
           node -r ts-node/register actions/worker.ts begin
-          echo 'capture=true' >> "$GITHUB_OUTPUT"
+          echo 'capture=enabled' >> "$GITHUB_OUTPUT"
   capture:
     needs: prepare
-    if: needs.prepare.outputs.capture == 'true'
+    if: needs.prepare.outputs.capture == 'enabled'
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     strategy:
@@ -92,7 +92,7 @@ jobs:
       - run: node -r ts-node/register actions/worker.ts capture
   finish:
     needs: [prepare, capture]
-    if: always() && needs.prepare.outputs.capture == 'true'
+    if: always() && needs.prepare.outputs.capture == 'enabled'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

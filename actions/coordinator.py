@@ -18,8 +18,8 @@ import urllib.request
 # 节点内每个官方请求的最小间隔。线程自身的节奏由客户端 SPIN_DELAY_MS 控制，
 # 这里只保证同一出口不会在极短时间内连打。
 DEFAULT_NODE_SPACING_MS = 250
-# 单个节点内触发过官方限速的线程数超过该值时，判定该出口已被封控并熔断换节点。
-DEFAULT_THROTTLE_LIMIT = 6
+# 单个 8 线程节点达到一半线程被官方限速时，判定该出口已被封控并熔断。
+DEFAULT_THROTTLE_LIMIT = 4
 # 两个以上节点在同一窗口内都被限速，判定为服务商整体限速，改为全局暂停。
 GLOBAL_LIMIT_NODES = 2
 GLOBAL_LIMIT_WINDOW_MS = 120_000
@@ -438,7 +438,7 @@ class Store:
                 if len({item['node'] for item in window}) >= GLOBAL_LIMIT_NODES:
                     # 多个出口同时被限速说明是服务商整体的限制，所有节点一起等。
                     state['until'] = max(state['until'], now + wait)
-                if len(threads) > state['topology']['throttleLimit']:
+                if len(threads) >= state['topology']['throttleLimit']:
                     # 单节点内太多线程被限速：熔断该出口，保留数据并让新节点接续。
                     state['halted'][node] = now
                     self.release_node(state, node)

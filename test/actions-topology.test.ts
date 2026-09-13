@@ -27,7 +27,7 @@ test("单个节点按线程数并发，节点数与矩阵一致", () => {
   assert.match(workflow, /OAKS_THREADS:\s*'8'/);
   assert.match(workflow, /OAKS_NODES:\s*'20'/);
   // 部署节奏是授权的运行参数，代码默认值保持更保守的 2 秒。
-  assert.match(workflow, /OAKS_SPIN_DELAY_MS:\s*'1500'/);
+  assert.match(workflow, /OAKS_SPIN_DELAY_MS:\s*'1000'/);
   assert.match(workflow, /max-parallel:\s*20/);
   const matrix = workflow.match(/worker:\s*\[([^\]]+)\]/)?.[1] ?? "";
   assert.equal(matrix.split(",").length, 20);
@@ -49,8 +49,9 @@ test("同时活跃的官方会话数受限，不能等于线程总数", () => {
 
 test("begin 把线程与节点拓扑交给协调器作为并发预算", () => {
   assert.match(worker, /maxInFlight:\s*threads \* nodes/);
-  assert.match(worker, /throttleLimit:\s*numberFromEnv\('OAKS_THROTTLE_LIMIT', 6\)/);
-  assert.match(coordinator, /DEFAULT_THROTTLE_LIMIT = 6/);
+  assert.match(workflow, /OAKS_THROTTLE_LIMIT:\s*'4'/);
+  assert.match(worker, /throttleLimit:\s*numberFromEnv\('OAKS_THROTTLE_LIMIT', 4\)/);
+  assert.match(coordinator, /DEFAULT_THROTTLE_LIMIT = 4/);
 });
 
 test("单次采集不再被 500 局上限截断，由配额或本轮预算收工", () => {
@@ -67,7 +68,7 @@ test("官方请求仍受节点间隔、Retry-After 与全局暂停约束", () =>
 });
 
 test("熔断节点交回租约并停止真实请求，但保留已落盘数据", () => {
-  assert.match(coordinator, /len\(threads\) > state\['topology'\]\['throttleLimit'\]/);
+  assert.match(coordinator, /len\(threads\) >= state\['topology'\]\['throttleLimit'\]/);
   assert.match(coordinator, /self\.release_node\(state, node\)/);
   assert.match(worker, /ACTIONS_HALTED/);
   assert.match(worker, /租约已交回，保留已落盘数据/);

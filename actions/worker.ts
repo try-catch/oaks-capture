@@ -274,7 +274,7 @@ async function main(): Promise<void> {
       threads,
       nodes,
       nodeMs: numberFromEnv('OAKS_NODE_SPACING_MS', 250),
-      throttleLimit: numberFromEnv('OAKS_THROTTLE_LIMIT', 6),
+      throttleLimit: numberFromEnv('OAKS_THROTTLE_LIMIT', 4),
       maxInFlight: threads * nodes,
       // 同时活跃的官方游戏会话数必须限制：demo 后端在大量并发会话时返回 GAME_REOPENED。
       maxClaims: numberFromEnv('OAKS_MAX_CLAIMS', 6),

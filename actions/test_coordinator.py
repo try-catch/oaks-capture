@@ -125,9 +125,9 @@ class RecoveryTests(unittest.TestCase):
     def test_node_circuit_breaker_halts_and_lets_another_node_continue(self):
         self.expand_registry(12)
         self.call('end')
-        self.call('begin', threads=8, nodes=2, maxInFlight=16, maxClaims=16, throttleLimit=6)
+        self.call('begin', threads=8, nodes=2, maxInFlight=16, maxClaims=16, throttleLimit=4)
         claimed = []
-        for number in range(7):
+        for number in range(4):
             worker = f'1.{number}'
             slug = self.store.call({'op': 'claim', 'run': '100-1', 'worker': worker}, check_legacy=False)['slug']
             key = hashlib.sha256(worker.encode()).hexdigest()
@@ -135,9 +135,9 @@ class RecoveryTests(unittest.TestCase):
             self.throttle(worker, slug, key)
             claimed.append((worker, slug, key))
         state = read(self.store.state_path)
-        # 超过 6 个线程被限速即熔断该节点，并交回未完成的租约。
+        # 8 线程节点达到一半线程被限速即熔断，并交回未完成的租约。
         self.assertIn('1', state['halted'])
-        self.assertEqual(len(state['nodeThrottle']['1']), 7)
+        self.assertEqual(len(state['nodeThrottle']['1']), 4)
         self.assertEqual(state['claims'][claimed[0][1]]['status'], 'released')
         self.assertEqual(state['claims'][claimed[0][1]]['worker'], '')
         # 熔断后的节点立刻停机，且不能再写已交回的游戏。

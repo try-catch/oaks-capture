@@ -17,6 +17,10 @@ let requestKey: string | undefined;
 let deadline = 0;
 let stopping = false;
 let egress = process.env.OAKS_EGRESS ?? '';
+// 采集期会屏蔽 console.log 以免把工具日志带进公开 Actions 日志；
+// 但吞吐诊断行只含数字与节点标识，用原始引用绕过屏蔽输出。
+const realLog = console.log.bind(console);
+const timing = { permit: 0, fetch: 0, respond: 0, append: 0, ack: 0, documents: 0 };
 process.on('SIGTERM', () => { stopping = true; });
 process.on('SIGINT', () => { stopping = true; });
 
@@ -88,8 +92,27 @@ function installDurability(): void {
     // 被协调器用旧响应重放（重新登录也会命中缓存，拿到假会话）。
     discardPending: () => { pending = undefined; requestKey = undefined; },
     requestStep: (id, step) => { requestKey = crypto.createHash('sha256').update(`${slug}:${id}:${step}`).digest('hex'); },
-    writeDocument: document => { rpc('append', { document, line: JSON.stringify(document) }); },
-    acknowledge: document => { rpc('ack', { hash: document.sourceRoundHash }); pending = undefined; requestKey = undefined; },
+    writeDocument: document => {
+      const started = Date.now();
+      rpc('append', { document, line: JSON.stringify(document) });
+      timing.append += Date.now() - started;
+      timing.documents += 1;
+      if (timing.documents % 25 === 0) {
+        const n = timing.documents;
+        realLog(JSON.stringify({
+          worker, phase: 'timing', docs: n,
+          permitMs: Math.round(timing.permit / n), fetchMs: Math.round(timing.fetch / n),
+          respondMs: Math.round(timing.respond / n), appendMs: Math.round(timing.append / n),
+          ackMs: Math.round(timing.ack / n),
+        }));
+      }
+    },
+    acknowledge: document => {
+      const started = Date.now();
+      rpc('ack', { hash: document.sourceRoundHash });
+      timing.ack += Date.now() - started;
+      pending = undefined; requestKey = undefined;
+    },
     syncFiles,
     shouldStop: stopped,
   });
@@ -102,7 +125,9 @@ function installDurability(): void {
     const request = { url, method: options.method ?? 'GET', headers: Object.fromEntries(new Headers(options.headers)), body: options.body };
     while (true) {
       if (stopped()) throw new Error('ACTIONS_BUDGET');
+      const permitStarted = Date.now();
       const permit = rpc('permit', { key, request });
+      timing.permit += Date.now() - permitStarted;
       if (permit.cached) {
         const cached = Buffer.from(permit.cached.body, 'base64');
         // 旧日志里可能缓存了业务失败的 200 响应；重放它会让这一局永久卡死。
@@ -115,10 +140,14 @@ function installDurability(): void {
       await new Promise(resolve => setTimeout(resolve, Math.min(5000, permit.wait)));
     }
     // 不设置 HTTP/SOCKS 代理：真实 fetch 在 GitHub-hosted Runner 内执行。
+    const fetchStarted = Date.now();
     const response = await officialFetch(input, { ...options, signal: AbortSignal.timeout(20_000) });
     const body = Buffer.from(await response.arrayBuffer());
+    timing.fetch += Date.now() - fetchStarted;
     const headers = Object.fromEntries(response.headers);
+    const respondStarted = Date.now();
     const settled = rpc('response', { key, response: { status: response.status, headers, body: body.toString('base64') }, usable: usableResponse(body) });
+    timing.respond += Date.now() - respondStarted;
     if (settled.halted) throw new Error('ACTIONS_HALTED');
     if (response.status === 429) throw new Error('ACTIONS_RATE_LIMIT');
     // 已由 fetch 解压，重建响应时移除传输编码元数据。

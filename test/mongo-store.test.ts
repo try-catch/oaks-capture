@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, upsertMongoRound } from "../src/mongo-store";
+import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, syncMongoRounds, upsertMongoRound } from "../src/mongo-store";
 
 test("sourceRoundHash 忽略敏感会话字段并保持内容稳定", () => {
   const first = { gameId: 32601, game: "sun_of_egypt", data: [{ request_id: "one", session_id: "secret", context: { total_win: 10 } }] };
@@ -23,5 +23,19 @@ test("MongoDB 建立唯一索引并按 sourceRoundHash upsert", async () => {
   const document = { gameId: 32601, game: "sun_of_egypt", data: [{ context: { total_win: 0 } }] };
   await upsertMongoRound(collection, document);
   assert.deepEqual((writes[0] as any).options, { upsert: true });
-  assert.match((writes[0] as any).filter.sourceRoundHash, /^[a-f0-9]{64}$/);
+  assert.match((writes[0] as any).filter.sourceRoundHash.$eq, /^[a-f0-9]{64}$/);
+  assert.equal((writes[0] as any).filter.sourceRoundHash.$type, "string");
+});
+
+test("历史数量一致时跳过全量 upsert，不一致时分批写入", async () => {
+  const documents = Array.from({ length: 3 }, (_, index) => ({ sourceRoundHash: String(index).padStart(64, "a"), data: [index] }));
+  let batches = 0;
+  const matching = { async estimatedDocumentCount() { return 3; }, async createIndex() {}, async updateOne() {} };
+  assert.equal(await syncMongoRounds(matching, documents), 0);
+  const repairing = {
+    async estimatedDocumentCount() { return 1; }, async createIndex() {}, async updateOne() {},
+    async bulkWrite(operations: unknown[]) { batches++; assert.ok(operations.length <= 2); },
+  };
+  assert.equal(await syncMongoRounds(repairing, documents, 2), 3);
+  assert.equal(batches, 2);
 });

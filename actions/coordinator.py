@@ -169,6 +169,7 @@ class Store:
         self.lock = threading.Lock() if memory is not None else None
         # 常驻模式下请求日志只放内存：不再为每个请求写文件 + fsync。
         self.journals = {}
+        self.hash_cache = {}
 
     def load(self):
         return read(self.state_path, {'owner': None, 'until': 0, 'next': 0, 'rateCount': 0, 'permit': None})
@@ -229,6 +230,8 @@ class Store:
         原来每轮都要把整个 NDJSON 逐行 json.loads 扫一遍（1228 行约 0.72 秒，
         且随文件增长），这里用只追加的纯文本索引把去重降到一次读+集合判断。
         """
+        if self.memory is not None and slug in self.hash_cache:
+            return self.hash_cache[slug]
         path = private / 'hashes.txt'
         if not path.exists():
             seeded = []
@@ -238,7 +241,10 @@ class Store:
                     try: seeded.append(json.loads(line)['sourceRoundHash'])
                     except Exception: pass
             path.write_text(''.join(h + '\n' for h in seeded))
-        return set(path.read_text().split())
+        known = set(path.read_text().split())
+        if self.memory is not None:
+            self.hash_cache[slug] = known
+        return known
 
     def check_legacy_container(self, state, now):
         """旧采集容器检查带 TTL：原来每个官方请求都跑一次 docker inspect（0.22 秒）。"""
@@ -402,9 +408,7 @@ class Store:
                 os.fsync(stream.fileno())
             with (private / 'hashes.txt').open('a') as index:
                 index.write(doc['sourceRoundHash'] + '\n')
-            # NDJSON 已 fsync 落盘，就在这里推进恢复点，省掉调用方单独一次 ack 往返。
-            # 若此刻进程崩溃，NDJSON 已领先 Mongo，恢复时会按 NDJSON 补齐 Mongo。
-            atomic(private / 'committed.json', {'sourceRoundHash': doc['sourceRoundHash'], 'run': run, 'at': now})
+            known.add(doc['sourceRoundHash'])
             return {'written': True}
         if op == 'ack':
             committed = req['hash']

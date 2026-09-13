@@ -5,7 +5,7 @@ import { MongoClient } from "mongodb";
 import { readRegistry } from "../catalog-sync";
 import { MONGO_COLLECTION, MONGO_URI } from "../config";
 import { numberOption, selectGames, stringOption } from "./cli";
-import { ensureMongoIndexes, sourceRoundHash, upsertMongoRound } from "./mongo-store";
+import { ensureMongoIndexes, sourceRoundHash, syncMongoRounds } from "./mongo-store";
 import { auditModeQuota } from "./mode-target";
 
 export function mongoURI(target: string): string {
@@ -42,11 +42,12 @@ export async function importMongo(args: string[]): Promise<Array<Record<string, 
       const documents = await readNDJSON(file);
       const collection = client.db(game.dbName).collection(MONGO_COLLECTION);
       await ensureMongoIndexes(collection);
-      for (const source of documents) {
+      const normalized = documents.map(source => {
         const document: Record<string, unknown> = { ...source, gameId: game.gameId, game: game.slug };
         document.sourceRoundHash = sourceRoundHash(document as { gameId?: number; game?: string; data: unknown });
-        await upsertMongoRound(collection, document);
-      }
+        return document;
+      });
+      await syncMongoRounds(collection, normalized);
       result.push({ gameId: game.gameId, slug: game.slug, dbName: game.dbName, sourceCount: documents.length, mongoCount: await collection.countDocuments() });
       console.log(`[mongo import] ${game.slug} source=${documents.length}`);
     }

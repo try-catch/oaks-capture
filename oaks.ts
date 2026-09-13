@@ -12,7 +12,7 @@ import { CaptureThrottle } from "./src/capture-throttle";
 import { numberOption, selectGames, stringOption } from "./src/cli";
 import { classifyRound, discoverFeatureInventory, FeatureInventory, includeObservedFeatures } from "./src/features";
 import { discoverGame } from "./src/game-definition";
-import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, upsertMongoRound } from "./src/mongo-store";
+import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, syncMongoRounds, upsertMongoRound } from "./src/mongo-store";
 import { actionFeatureKey, actionSpinType, command, JSONMap, nextAction, openSession, protocolAction, ProtocolHttpError, ProtocolStatusError, roundSpinType, Session } from "./src/protocol";
 import { buildPlayableActions, discoverShop, PlayAction, ShopInventory } from "./src/shop";
 import { validateGameRound } from "./src/validators";
@@ -262,12 +262,12 @@ export async function captureGame(
   let collection: any;
   const database = process.env.OAKS_MONGO_DB ?? game.dbName;
   try {
-    mongo = new MongoClient(MONGO_URI, { serverSelectionTimeoutMS: 2500 });
+    mongo = new MongoClient(MONGO_URI, { serverSelectionTimeoutMS: 2500, maxPoolSize: 1, minPoolSize: 0, maxIdleTimeMS: 30_000 });
     await mongo.connect();
     collection = mongo.db(database).collection(MONGO_COLLECTION);
     await ensureMongoIndexes(collection);
-    for (const document of priorDocuments) await upsertMongoRound(collection, document);
-    console.log(`[Mongo] 已连接并去重同步 ${database}.${MONGO_COLLECTION}`);
+    const repaired = await syncMongoRounds(collection, priorDocuments);
+    console.log(`[Mongo] 已连接 ${database}.${MONGO_COLLECTION}${repaired ? `，批量修复 ${repaired} 条历史数据` : "，历史数量一致无需重写"}`);
   } catch (error) {
     if (captureRuntime) throw new Error("测试服 Mongo 连接或去重同步失败，禁止发出官方请求");
     console.warn(`[Mongo] 未连接，本次仅保存 NDJSON：${(error as Error).message}`);

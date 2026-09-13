@@ -41,6 +41,8 @@ export function sourceRoundHash(document: { gameId?: number; game?: string; data
 interface MongoCollectionLike {
   createIndex(key: Record<string, number>, options?: Record<string, unknown>): Promise<unknown>;
   updateOne(filter: Record<string, unknown>, update: Record<string, unknown>, options: Record<string, unknown>): Promise<unknown>;
+  bulkWrite?(...args: any[]): Promise<unknown>;
+  estimatedDocumentCount?(): Promise<number>;
 }
 
 export async function ensureMongoIndexes(collection: MongoCollectionLike): Promise<void> {
@@ -49,5 +51,28 @@ export async function ensureMongoIndexes(collection: MongoCollectionLike): Promi
 
 export async function upsertMongoRound(collection: MongoCollectionLike, document: Record<string, unknown>): Promise<void> {
   const hash = String(document.sourceRoundHash ?? sourceRoundHash(document as { gameId?: number; game?: string; data: unknown }));
-  await collection.updateOne({ sourceRoundHash: hash }, { $setOnInsert: { ...document, sourceRoundHash: hash } }, { upsert: true });
+  // 唯一索引是 partial index；查询必须包含相同类型条件，Mongo 才会稳定使用索引。
+  await collection.updateOne({ sourceRoundHash: { $eq: hash, $type: "string" } }, { $setOnInsert: { ...document, sourceRoundHash: hash } }, { upsert: true });
+}
+
+export async function syncMongoRounds(collection: MongoCollectionLike, documents: Record<string, unknown>[], batchSize = 500): Promise<number> {
+  const unique = [...new Map(documents.map(document => {
+    const hash = String(document.sourceRoundHash ?? sourceRoundHash(document as { gameId?: number; game?: string; data: unknown }));
+    return [hash, { ...document, sourceRoundHash: hash }];
+  })).values()];
+  if (collection.estimatedDocumentCount && await collection.estimatedDocumentCount() === unique.length) return 0;
+  if (!collection.bulkWrite) {
+    for (const document of unique) await upsertMongoRound(collection, document);
+    return unique.length;
+  }
+  for (let offset = 0; offset < unique.length; offset += batchSize) {
+    await collection.bulkWrite(unique.slice(offset, offset + batchSize).map(document => ({
+      updateOne: {
+        filter: { sourceRoundHash: { $eq: document.sourceRoundHash, $type: "string" } },
+        update: { $setOnInsert: document },
+        upsert: true,
+      },
+    })), { ordered: false });
+  }
+  return unique.length;
 }

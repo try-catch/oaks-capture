@@ -44,7 +44,9 @@ env:
   # 官方 demo 后端只容忍少量并发游戏会话：实测 107 个会话时 103 个游戏立刻
   # 返回 GAME_REOPENED，而 6 个会话时成功率为 97%。这里限制的是同时活跃的
   # 游戏会话数，不是线程数。
-  OAKS_MAX_CLAIMS: ${{ inputs.mode == 'benchmark' && inputs.max_claims || vars.OAKS_STABLE_MAX_CLAIMS || '6' }}
+  # 测试服发生过 Mongo 连接和写入过载；正式采集先固定 6 个写入者，只有单独
+  # benchmark 才允许人工提高，不能由仓库变量在无人监督时放大。
+  OAKS_MAX_CLAIMS: ${{ inputs.mode == 'benchmark' && inputs.max_claims || '6' }}
   # 常驻长连接：单次协调往返从 1-2 秒降到毫秒级。1 启用，0 关闭。
   OAKS_PERSISTENT_CHANNEL: '1'
 

@@ -56,6 +56,26 @@ test("常驻进程不响应时必须在超时内回退，不能永久卡住线�
   } finally { channel.close(); }
 });
 
+test("常驻子进程不得吊住事件循环，close 后进程必须能自行退出", async () => {
+  const script = `
+    const [modulePath, echo] = process.argv.slice(-2);
+    const { CoordinatorChannel } = require(modulePath);
+    const commands = { persistent: JSON.parse(echo), oneShot: JSON.parse(echo) };
+    const channel = new CoordinatorChannel(commands, true);
+    channel.call(JSON.stringify({ op: 'status' }));
+    channel.close();
+  `;
+  const path = await import("node:path");
+  const { execFile } = await import("node:child_process");
+  const modulePath = path.resolve(__dirname, "..", "src", "coordinator-channel.ts");
+  const code = await new Promise<number>(resolve => {
+    const child = execFile(process.execPath, ["-r", "ts-node/register", "-e", script, modulePath, JSON.stringify(ECHO)], { timeout: 20_000 }, error => resolve(error ? 1 : 0));
+    child.unref();
+  });
+  // 线上 check 步骤就是跑完却没有退出，导致整个运行空等 10 分钟。
+  assert.equal(code, 0, "收尾后进程仍未退出");
+});
+
 test("常驻进程不可用时回退到单次调用，不抛错也不卡死", () => {
   const broken = ["python3", "-c", "import sys; sys.exit(3)"];
   const channel = new CoordinatorChannel({ persistent: broken, oneShot: ECHO }, true);

@@ -258,13 +258,15 @@ async function supervise(): Promise<void> {
 
 async function main(): Promise<void> {
   const mode = process.argv[2];
-  if (mode === 'thread') { await runThread(); return; }
+  // 常驻通道会吊住事件循环，每个模式结束时都必须显式收尾，否则进程跑完不退出。
+  if (mode === 'thread') { try { await runThread(); } finally { channel.close(); } return; }
   if (mode === 'begin') {
     requireGithubHosted();
     requireProviderAuthorization();
     const threads = numberFromEnv('OAKS_THREADS', 8);
     const nodes = numberFromEnv('OAKS_NODES', 1);
-    console.log(JSON.stringify(rpc('begin', {
+    try {
+      console.log(JSON.stringify(rpc('begin', {
       githubToken: process.env.OAKS_GITHUB_TOKEN,
       threads,
       nodes,
@@ -273,25 +275,28 @@ async function main(): Promise<void> {
       maxInFlight: threads * nodes,
       // 同时活跃的官方游戏会话数必须限制：demo 后端在大量并发会话时返回 GAME_REOPENED。
       maxClaims: numberFromEnv('OAKS_MAX_CLAIMS', 6),
-      deadlineMinutes: numberFromEnv('OAKS_DEADLINE_MINUTES', 40),
-    })));
+        deadlineMinutes: numberFromEnv('OAKS_DEADLINE_MINUTES', 40),
+      })));
+    } finally { channel.close(); }
     return;
   }
-  if (mode === 'end') { console.log(JSON.stringify(rpc('end'))); return; }
-  if (mode === 'status') { console.log(JSON.stringify(rpc('status'))); return; }
+  if (mode === 'end') { try { console.log(JSON.stringify(rpc('end'))); } finally { channel.close(); } return; }
+  if (mode === 'status') { try { console.log(JSON.stringify(rpc('status'))); } finally { channel.close(); } return; }
   if (mode === 'check') {
     requireGithubHosted();
-    rpc('status');
+    try {
+      rpc('status');
     if (!process.env.OAKS_MONGO_URI) throw new Error('缺少受控 Mongo 连接');
     const { MongoClient } = await import('mongodb');
     const client = new MongoClient(process.env.OAKS_MONGO_URI, { serverSelectionTimeoutMS: 10_000 });
     try { await client.connect(); await client.db('admin').command({ ping: 1 }); }
-    finally { await client.close(); }
-    console.log('SSH 主机身份、协调器与 Mongo 隧道检查通过；未请求官方接口。');
+      finally { await client.close(); }
+      console.log('SSH 主机身份、协调器与 Mongo 隧道检查通过；未请求官方接口。');
+    } finally { channel.close(); }
     return;
   }
   if (mode !== 'capture') throw new Error('未知执行模式');
-  await supervise();
+  try { await supervise(); } finally { channel.close(); }
 }
 
 main().catch(() => { console.error('Actions 采集安全停止，请检查测试服协调状态；未输出凭据或官方响应。'); process.exitCode = 1; });

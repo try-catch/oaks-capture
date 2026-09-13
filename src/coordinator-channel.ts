@@ -45,15 +45,27 @@ export class CoordinatorChannel {
   }
 
   close(): void {
-    this.child?.kill();
+    const child = this.child;
     this.child = undefined;
     this.buffer = '';
+    if (!child) return;
+    // 必须销毁管道：kill 是异步的，句柄在子进程真正退出前仍然引用事件循环，
+    // 只 kill 不销毁的话进程依旧不会结束（实测）。
+    (child.stdin as unknown as { destroy?: () => void })?.destroy?.();
+    (child.stdout as unknown as { destroy?: () => void })?.destroy?.();
+    child.kill();
+    child.unref();
   }
 
   private start(): void {
     const [command, ...args] = this.commands.persistent;
     // 管道保持非阻塞：阻塞读没有超时，一旦对端不响应会永久卡住整条线程。
     const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'inherit'] });
+    // 常驻子进程必须 unref：否则父进程退出时事件循环被它吊住，
+    // 表现为“步骤已经跑完却永不结束”（线上 check 步骤就是这样卡了 10 分钟）。
+    child.unref();
+    (child.stdout as unknown as { unref?: () => void })?.unref?.();
+    (child.stdin as unknown as { unref?: () => void })?.unref?.();
     child.on('exit', () => { if (this.child === child) this.child = undefined; });
     this.child = child;
     this.buffer = '';

@@ -69,6 +69,18 @@ test("丢弃未完成局必须同时清掉请求日志键，否则重新登录�
   assert.doesNotMatch(workerSource, /value: undefined/);
 });
 
+test("协调走常驻长连接，异常时回退单次调用", () => {
+  // 单次调用要新起 ssh+sudo+python，实测每次 1-2 秒，是一轮三个往返的主要成本。
+  assert.match(worker, /COORDINATOR\} --serve/);
+  assert.match(worker, /OAKS_PERSISTENT_CHANNEL/);
+  assert.match(worker, /class CoordinatorChannel/);
+  // 阻塞读需要把管道设为阻塞模式，否则 readSync 会抛 EAGAIN。
+  assert.match(worker, /setBlocking\(true\)/);
+  // 通道任何异常都必须退回单次调用，且单次调用仍然校验 ok。
+  assert.match(worker, /return this\.oneShot\(payload\)/);
+  assert.match(worker, /协调器拒绝操作/);
+});
+
 test("worker 拒绝重放已缓存的业务失败响应并输出可诊断原因", () => {
   assert.match(worker, /已缓存的官方响应为业务失败/);
   assert.match(worker, /usable: usableResponse\(body\)/);

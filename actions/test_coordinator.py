@@ -241,6 +241,23 @@ class RecoveryTests(unittest.TestCase):
         self.assertNotIn('fixture', self.store.state_path.read_text())
         self.assertTrue((self.store.directory / 'one' / (self.key + '.json')).exists())
 
+    def test_serve_handles_many_requests_on_one_process(self):
+        # 常驻模式必须在同一条连接上连续处理多个请求，且语义与单次调用一致。
+        import io
+        from coordinator import serve
+        lines = [json.dumps({'op': 'status', 'run': '100-1'}),
+                 json.dumps({'op': 'claim', 'run': '100-1', 'worker': '9'}),
+                 json.dumps({'op': 'claim', 'run': '100-1', 'worker': '9'})]
+        stream_out = io.StringIO()
+        with patch('sys.stdin', io.StringIO('\n'.join(lines) + '\n')), patch('sys.stdout', stream_out):
+            serve(Store(self.root))
+        responses = [json.loads(line) for line in stream_out.getvalue().strip().splitlines()]
+        self.assertEqual(len(responses), 3)
+        self.assertTrue(all(response['ok'] for response in responses))
+        self.assertEqual(responses[1]['result']['slug'], 'two')
+        # 两个游戏都已认领，第三次必须返回停止而不是重复分配。
+        self.assertTrue(responses[2]['result']['stop'])
+
     def test_pending_without_value_clears_the_incomplete_round(self):
         # 调用方省略 value 时必须按“清空未完成局”处理，而不是报错。
         self.call('pending', value={'id': 'round', 'frames': [{'frame': 1}]})

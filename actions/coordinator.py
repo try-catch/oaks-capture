@@ -368,10 +368,33 @@ class Store:
         raise ValueError('未知协调操作')
 
 
+def serve(store):
+    """常驻模式：在一条 stdin/stdout 连接上按 JSON 行处理请求。
+
+    与单次调用共用同一个 Store，语义完全一致；区别只是不再每次调用都
+    新起 ssh + sudo + python 进程（实测每次 1-2 秒，是一轮三个往返的主要成本）。
+    """
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            result = store.call(json.loads(line))
+            response = {'ok': True, 'result': result}
+        except Exception as error:
+            # 日志不输出输入、凭据、响应正文或底层异常内容。
+            response = {'ok': False, 'error': str(error) if isinstance(error, ValueError) else type(error).__name__}
+        sys.stdout.write(json.dumps(response) + '\n')
+        sys.stdout.flush()
+
+
 if __name__ == '__main__':
+    root = Path(__file__).resolve().parent.parent
+    if '--serve' in sys.argv:
+        serve(Store(root))
+        sys.exit(0)
     try:
-        store = Store(Path(__file__).resolve().parent.parent)
-        print(json.dumps({'ok': True, 'result': store.call(json.load(sys.stdin))}))
+        print(json.dumps({'ok': True, 'result': Store(root).call(json.load(sys.stdin))}))
     except Exception as error:
         # 日志不输出输入、凭据、响应正文或底层异常内容。
         print(json.dumps({'ok': False, 'error': str(error) if isinstance(error, ValueError) else type(error).__name__}))

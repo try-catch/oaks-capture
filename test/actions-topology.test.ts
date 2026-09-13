@@ -8,8 +8,9 @@ const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "captur
 const worker = fs.readFileSync(path.join(root, "actions", "worker.ts"), "utf8");
 const coordinator = fs.readFileSync(path.join(root, "actions", "coordinator.py"), "utf8");
 
-test("每小时只调度一次并保留手工 check/capture 入口", () => {
-  assert.match(workflow, /options:\s*\[check, capture\]/);
+test("每小时只调度一次并保留手工 check/capture/benchmark 入口", () => {
+  assert.match(workflow, /options:\s*\[check, capture, benchmark\]/);
+  assert.match(workflow, /options:\s*\['6', '10', '20', '40', '60'\]/);
   assert.match(workflow, /cron:\s*'43 \* \* \* \*'/);
   assert.doesNotMatch(workflow, /push:/);
 });
@@ -20,7 +21,7 @@ test("采集严格服从 prepare 输出并保持单队列", () => {
   assert.match(workflow, /if: always\(\) && needs\.prepare\.outputs\.capture == 'enabled'/);
   assert.match(workflow, /group: oaks-official-single-queue/);
   assert.match(workflow, /cancel-in-progress: false/);
-  assert.match(workflow, /if: vars\.CAPTURE_ENABLED == 'true' && \(github\.event_name == 'schedule' \|\| inputs\.mode == 'capture'\)/);
+  assert.match(workflow, /inputs\.mode == 'capture' \|\| inputs\.mode == 'benchmark'/);
 });
 
 test("单个节点按线程数并发，节点数与矩阵一致", () => {
@@ -42,7 +43,8 @@ test("不会自动派发下一轮形成排队积压", () => {
 
 test("同时活跃的官方会话数受限，不能等于线程总数", () => {
   // 实测 107 个并发会话 → 103 个游戏立刻 GAME_REOPENED；6 个会话时成功率 97%。
-  assert.match(workflow, /OAKS_MAX_CLAIMS:\s*'6'/);
+  assert.match(workflow, /OAKS_MAX_CLAIMS:\s*\$\{\{ inputs\.mode == 'benchmark' && inputs\.max_claims \|\| '6' \}\}/);
+  assert.match(workflow, /OAKS_DEADLINE_MINUTES:\s*\$\{\{ inputs\.mode == 'benchmark' && '15' \|\| '45' \}\}/);
   assert.match(worker, /maxClaims: numberFromEnv\('OAKS_MAX_CLAIMS', 6\)/);
   assert.doesNotMatch(worker, /maxClaims: threads \* nodes/);
 });

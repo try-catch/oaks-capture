@@ -1,13 +1,19 @@
 name: 3 OAKS durable capture
+run-name: 3 OAKS ${{ inputs.mode || 'capture' }} max=${{ inputs.max_claims || '6' }}
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: check 只验证部署通道；capture 执行真实采集
+        description: check 验证；capture 正式采集；benchmark 做 15 分钟阶梯测试
         type: choice
-        options: [check, capture]
+        options: [check, capture, benchmark]
         default: check
+      max_claims:
+        description: benchmark 同时活跃会话数；其它模式固定使用 6
+        type: choice
+        options: ['6', '10', '20', '40', '60']
+        default: '6'
   schedule:
     - cron: '43 * * * *'
 
@@ -30,12 +36,12 @@ env:
   OAKS_NODES: '20'
   OAKS_NODE_SPACING_MS: '250'
   OAKS_THROTTLE_LIMIT: '4'
-  OAKS_DEADLINE_MINUTES: '45'
+  OAKS_DEADLINE_MINUTES: ${{ inputs.mode == 'benchmark' && '15' || '45' }}
   OAKS_SPIN_DELAY_MS: '1000'
   # 官方 demo 后端只容忍少量并发游戏会话：实测 107 个会话时 103 个游戏立刻
   # 返回 GAME_REOPENED，而 6 个会话时成功率为 97%。这里限制的是同时活跃的
   # 游戏会话数，不是线程数。
-  OAKS_MAX_CLAIMS: '6'
+  OAKS_MAX_CLAIMS: ${{ inputs.mode == 'benchmark' && inputs.max_claims || '6' }}
   # 常驻长连接：单次协调往返从 1-2 秒降到毫秒级。1 启用，0 关闭。
   OAKS_PERSISTENT_CHANNEL: '1'
 
@@ -59,7 +65,7 @@ jobs:
       - run: python3 actions/setup-ssh.py
       - run: node -r ts-node/register actions/worker.ts check
       - id: mode
-        if: vars.CAPTURE_ENABLED == 'true' && (github.event_name == 'schedule' || inputs.mode == 'capture')
+        if: vars.CAPTURE_ENABLED == 'true' && (github.event_name == 'schedule' || inputs.mode == 'capture' || inputs.mode == 'benchmark')
         env:
           OAKS_GITHUB_TOKEN: ${{ github.token }}
         run: |

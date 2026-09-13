@@ -45,7 +45,7 @@ env:
   # 游戏会话数，不是线程数。
   OAKS_MAX_CLAIMS: '6'
   # 常驻长连接：单次协调往返从 1-2 秒降到毫秒级。1 启用，0 关闭。
-  OAKS_PERSISTENT_CHANNEL: '1'
+  OAKS_PERSISTENT_CHANNEL: '0'
 
 jobs:
   prepare:

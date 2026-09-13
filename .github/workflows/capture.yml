@@ -1,5 +1,5 @@
 name: 3 OAKS durable capture
-run-name: 3 OAKS ${{ inputs.mode || 'capture' }} max=${{ inputs.max_claims || '6' }} spacing=${{ inputs.node_spacing_ms || '250' }}ms
+run-name: 3 OAKS ${{ inputs.mode || 'capture' }} max=${{ inputs.mode == 'benchmark' && inputs.max_claims || 'stable' }} spacing=${{ inputs.mode == 'benchmark' && inputs.node_spacing_ms || '250' }}ms
 
 on:
   workflow_dispatch:
@@ -19,8 +19,6 @@ on:
         type: choice
         options: ['250', '200']
         default: '250'
-  schedule:
-    - cron: '43 * * * *'
 
 permissions:
   contents: read
@@ -70,7 +68,7 @@ jobs:
       - run: python3 actions/setup-ssh.py
       - run: node -r ts-node/register actions/worker.ts check
       - id: mode
-        if: vars.CAPTURE_ENABLED == 'true' && (inputs.mode == 'benchmark' || (vars.BENCHMARK_ENABLED != 'true' && (github.event_name == 'schedule' || inputs.mode == 'capture')))
+        if: vars.CAPTURE_ENABLED == 'true' && (inputs.mode == 'benchmark' || (vars.BENCHMARK_ENABLED != 'true' && inputs.mode == 'capture'))
         env:
           OAKS_GITHUB_TOKEN: ${{ github.token }}
         run: |

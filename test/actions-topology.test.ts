@@ -8,10 +8,10 @@ const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "captur
 const worker = fs.readFileSync(path.join(root, "actions", "worker.ts"), "utf8");
 const coordinator = fs.readFileSync(path.join(root, "actions", "coordinator.py"), "utf8");
 
-test("每小时只调度一次并保留手工 check/capture/benchmark 入口", () => {
+test("采集仅由外部监督器派发并保留 check/capture/benchmark 入口", () => {
   assert.match(workflow, /options:\s*\[check, capture, benchmark\]/);
   assert.match(workflow, /options:\s*\['6', '10', '20', '40', '60', '80', '100', '120'\]/);
-  assert.match(workflow, /cron:\s*'43 \* \* \* \*'/);
+  assert.doesNotMatch(workflow, /schedule:/);
   assert.doesNotMatch(workflow, /push:/);
 });
 
@@ -21,7 +21,7 @@ test("采集严格服从 prepare 输出并保持单队列", () => {
   assert.match(workflow, /if: always\(\) && needs\.prepare\.outputs\.capture == 'enabled'/);
   assert.match(workflow, /group: oaks-official-single-queue/);
   assert.match(workflow, /cancel-in-progress: false/);
-  assert.match(workflow, /inputs\.mode == 'benchmark' \|\| \(vars\.BENCHMARK_ENABLED != 'true'/);
+  assert.match(workflow, /inputs\.mode == 'benchmark' \|\| \(vars\.BENCHMARK_ENABLED != 'true' && inputs\.mode == 'capture'/);
 });
 
 test("单个节点按线程数并发，节点数与矩阵一致", () => {

@@ -354,7 +354,9 @@ export async function captureGame(
       if (!hashes.has(document.sourceRoundHash)) {
         captureRuntime?.writeDocument(document);
         await fs.appendFile(ndjson, `${JSON.stringify(document)}\n`);
+        const mongoStarted = Date.now();
         if (collection) await upsertMongoRound(collection, document);
+        captureRuntime?.noteMongo?.(Date.now() - mongoStarted);
         hashes.add(document.sourceRoundHash);
         lastCompletedHash = document.sourceRoundHash;
         for (const feature of features) {

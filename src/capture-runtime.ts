@@ -13,6 +13,8 @@ export interface CaptureRuntime {
   writeDocument(document: Record<string, unknown>): void;
   acknowledge(document: Record<string, unknown>): void;
   syncFiles(): void;
+  /** 每局 Mongo 写入耗时（毫秒），用于定位剩余瓶颈。 */
+  noteMongo?(ms: number): void;
   shouldStop(): boolean;
 }
 export let captureRuntime: CaptureRuntime | undefined;

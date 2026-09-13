@@ -26,6 +26,13 @@ GLOBAL_LIMIT_NODES = 2
 GLOBAL_LIMIT_WINDOW_MS = 120_000
 # 429 未给出 Retry-After 时的保守等待。
 CONSERVATIVE_WAIT_MS = 60_000
+# 满额 claim 的退避区间。20 节点 × 1 线程的拓扑下稳定只有 6 个节点持有游戏，
+# 其余节点若固定 3 秒轮询，会产生约 5 次/秒的空转 claim（各带一次 SSH 往返），
+# 在已经过载的测试服上叠加控制面风暴。指数退避把稳定态压到每次切换的少量探测。
+CLAIM_WAIT_BASE_MS = 1500
+CLAIM_WAIT_MAX_MS = 30_000
+# claimWaits 的条目上限：长跑时不因为节点标识累积而无限增长。
+CLAIM_WAITS_LIMIT = 200
 # 线程身份为 <节点>.<线程>，节点身份用于出口熔断，线程身份用于游戏租约。
 THREAD_ID = re.compile(r'([0-9]+)\.([0-9]+)')
 # 旧采集容器检查的缓存时长：不必每个官方请求都跑一次 docker inspect。
@@ -39,6 +46,24 @@ GAME_LOCAL_OPS = {'load', 'pending', 'files', 'append', 'ack'}
 def node_of(worker):
     match = THREAD_ID.fullmatch(worker)
     return match.group(1) if match else worker
+
+
+def claim_backoff(state, worker):
+    """满额等待按连续失败次数指数退避；调用方在成功认领后必须清零。
+
+    返回毫秒数，第一次为 CLAIM_WAIT_BASE_MS，之后逐次翻倍到 CLAIM_WAIT_MAX_MS。
+    """
+    waits = state.setdefault('claimWaits', {})
+    tries = waits.get(worker, 0) + 1
+    waits[worker] = tries
+    if len(waits) > CLAIM_WAITS_LIMIT:
+        for stale in list(waits)[:CLAIM_WAITS_LIMIT // 2]:
+            waits.pop(stale, None)
+    return min(CLAIM_WAIT_MAX_MS, CLAIM_WAIT_BASE_MS * (2 ** min(tries - 1, 5)))
+
+
+def clear_claim_backoff(state, worker):
+    state.setdefault('claimWaits', {}).pop(worker, None)
 
 
 def positive_int(value, fallback):
@@ -281,6 +306,7 @@ class Store:
         state.setdefault('nodeThrottle', {})
         state.setdefault('halted', {})
         state.setdefault('rateNodes', [])
+        state.setdefault('claimWaits', {})
         state.setdefault('metrics', {'startedAt': now, 'documentsWritten': 0, 'responses': 0,
                                      'http429': 0, 'businessErrors': {}})
         # begin 总会重写 topology；这里给旧状态一个保守占位，避免升级期间放大并发。
@@ -288,7 +314,10 @@ class Store:
                                       'maxInFlight': 1, 'maxClaims': 6})
         if op == 'status':
             return {key: state.get(key) for key in ('owner', 'until', 'next', 'claims', 'deadline', 'halted', 'topology', 'metrics')} | {
-                'permits': len(state['permits']), 'nodeUntil': state['nodeUntil']}
+                'permits': len(state['permits']), 'nodeUntil': state['nodeUntil'],
+                # 退避汇总用于确认控制面没有重新退化成满额空转轮询。
+                'claimBackoff': {'workers': len(state['claimWaits']),
+                                 'maxTries': max(state['claimWaits'].values(), default=0)}}
         if not re.fullmatch(r'[0-9]+-[0-9]+', run):
             raise ValueError('非法运行标识')
         if op == 'begin':
@@ -325,7 +354,8 @@ class Store:
             }
             metrics = {'startedAt': now, 'documentsWritten': 0, 'responses': 0, 'http429': 0, 'businessErrors': {}}
             state.update(owner=run, deadline=topology['deadline'], claims={}, games=games, waiters=[],
-                         permits={}, nodeUntil={}, nodeThrottle={}, halted={}, rateNodes=[], topology=topology, metrics=metrics)
+                         permits={}, nodeUntil={}, nodeThrottle={}, halted={}, rateNodes=[], topology=topology,
+                         metrics=metrics, claimWaits={})
             return {'deadline': state['deadline'], 'until': state['until'], 'games': len(games), 'topology': topology}
         if state['owner'] != run:
             raise ValueError('跨环境队列锁不属于当前运行')
@@ -343,12 +373,12 @@ class Store:
             if now < state['until']:
                 return {'wait': min(30_000, state['until'] - now), 'deadline': state['deadline']}
             if sum(claim.get('status') == 'running' for claim in state['claims'].values()) >= state['topology']['maxClaims']:
-                return {'wait': 3000, 'deadline': state['deadline']}
+                return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
             # 把会话均匀铺到 Runner 出口，避免先启动的单个节点抢走 8 个游戏，
             # 导致其它 19 个节点空等且所有请求挤在同一节点间隔里。
             per_node = max(1, (state['topology']['maxClaims'] + state['topology']['nodes'] - 1) // state['topology']['nodes'])
             if sum(claim.get('status') == 'running' and claim.get('node') == node for claim in state['claims'].values()) >= per_node:
-                return {'wait': 3000, 'deadline': state['deadline']}
+                return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
             for slug in state['games']:
                 claim = state['claims'].get(slug)
                 # 熔断节点释放出的游戏立刻可以重新认领；其余已认领游戏在本轮内不重复认领。
@@ -367,6 +397,7 @@ class Store:
                 state['claims'][slug] = {'worker': worker, 'status': 'running', 'node': node,
                                          'runner': req.get('runner', {}), 'baselineCount': baseline}
                 state['cursor'] = state['games'][(state['games'].index(slug) + 1) % len(state['games'])]
+                clear_claim_backoff(state, worker)
                 return {'slug': slug, 'deadline': state['deadline']}
             return {'stop': True}
         slug = str(req.get('slug', ''))

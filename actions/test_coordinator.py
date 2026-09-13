@@ -7,7 +7,8 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
-from coordinator import CONSERVATIVE_WAIT_MS, Store, atomic, business_error_code, current_quota_complete, node_of, read, retry_after_ms
+from coordinator import (CLAIM_WAIT_BASE_MS, CLAIM_WAIT_MAX_MS, CONSERVATIVE_WAIT_MS, Store, atomic,
+                         business_error_code, current_quota_complete, node_of, read, retry_after_ms)
 
 
 class RecoveryTests(unittest.TestCase):
@@ -200,8 +201,63 @@ class RecoveryTests(unittest.TestCase):
         same_node = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.1'}, check_legacy=False)
         other_node = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2.0'}, check_legacy=False)
         self.assertIn('slug', first)
-        self.assertEqual(same_node['wait'], 3000)
+        self.assertEqual(same_node['wait'], CLAIM_WAIT_BASE_MS)
         self.assertIn('slug', other_node)
+
+    def test_full_capacity_claim_backs_off_exponentially(self):
+        """20 节点 × 1 线程、全局 6 claims 时满额节点必须指数退避。
+
+        固定 3 秒轮询会让 14 个空闲节点持续空转（约 5 次/秒的 claim，每次一条
+        SSH 往返），这正是控制面风暴的来源；退避后稳定态只剩游戏切换时的少量探测。
+        """
+        self.expand_registry(20)
+        self.call('end')
+        self.call('begin', threads=1, nodes=20, maxInFlight=20, maxClaims=6)
+        for number in range(1, 7):
+            claimed = self.store.call({'op': 'claim', 'run': '100-1', 'worker': f'{number}.0'}, check_legacy=False)
+            self.assertIn('slug', claimed)
+            self.clear_node_backoff()
+        waits = [self.store.call({'op': 'claim', 'run': '100-1', 'worker': '19.0'},
+                                 check_legacy=False)['wait'] for _ in range(7)]
+        self.assertEqual(waits[0], CLAIM_WAIT_BASE_MS)
+        self.assertEqual(waits, sorted(waits))
+        self.assertEqual(waits[1], CLAIM_WAIT_BASE_MS * 2)
+        self.assertEqual(waits[-1], CLAIM_WAIT_MAX_MS)
+        # 退避汇总必须可观测，门禁才能确认控制面没有退回成满额空转轮询。
+        backoff = self.call('status')['claimBackoff']
+        self.assertEqual(backoff['workers'], 1)
+        self.assertEqual(backoff['maxTries'], 7)
+
+    def test_successful_claim_clears_backoff(self):
+        """拿到租约后必须清零退避，否则正常接续会被上一次满额拖慢。"""
+        self.expand_registry(20)
+        self.call('end')
+        self.call('begin', threads=1, nodes=20, maxInFlight=20, maxClaims=6)
+        for number in range(1, 7):
+            self.store.call({'op': 'claim', 'run': '100-1', 'worker': f'{number}.0'}, check_legacy=False)
+            self.clear_node_backoff()
+        self.assertEqual(self.store.call({'op': 'claim', 'run': '100-1', 'worker': '19.0'},
+                                         check_legacy=False)['wait'], CLAIM_WAIT_BASE_MS)
+        self.assertEqual(read(self.store.state_path)['claimWaits'], {'19.0': 1})
+        state = read(self.store.state_path)
+        state['claims']['g0']['status'] = 'released'
+        atomic(self.store.state_path, state)
+        self.assertIn('slug', self.store.call({'op': 'claim', 'run': '100-1', 'worker': '19.0'}, check_legacy=False))
+        self.assertNotIn('19.0', read(self.store.state_path).get('claimWaits', {}))
+
+    def test_begin_resets_claim_backoff(self):
+        """新一轮 begin 必须清空退避，避免上一轮的空转计数延续到新运行。"""
+        self.expand_registry(20)
+        self.call('end')
+        self.call('begin', threads=1, nodes=20, maxInFlight=20, maxClaims=6)
+        for number in range(1, 7):
+            self.store.call({'op': 'claim', 'run': '100-1', 'worker': f'{number}.0'}, check_legacy=False)
+            self.clear_node_backoff()
+        self.store.call({'op': 'claim', 'run': '100-1', 'worker': '19.0'}, check_legacy=False)
+        self.assertEqual(read(self.store.state_path)['claimWaits'], {'19.0': 1})
+        self.call('end')
+        self.call('begin', threads=1, nodes=20, maxInFlight=20, maxClaims=6)
+        self.assertEqual(read(self.store.state_path)['claimWaits'], {})
 
     def test_per_node_request_interval_and_reject_report_path_escape(self):
         self.call('permit', key=self.key, request={})
@@ -238,7 +294,7 @@ class RecoveryTests(unittest.TestCase):
         for number in range(2, 7):
             state['claims'][f'busy_{number}'] = {'worker': str(number), 'status': 'running'}
         atomic(self.store.state_path, state)
-        self.assertEqual(self.call('claim')['wait'], 3000)
+        self.assertEqual(self.call('claim')['wait'], CLAIM_WAIT_BASE_MS)
         self.assertNotIn('two', read(self.store.state_path)['claims'])
         self.call('done', status='incomplete', count=1)
         self.assertEqual(self.call('claim')['slug'], 'two')

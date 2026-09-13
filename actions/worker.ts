@@ -206,7 +206,10 @@ async function runThread(): Promise<void> {
     }
     if (claimed.stop) break;
     if (claimed.wait) {
-      await new Promise(resolve => setTimeout(resolve, Math.min(5000, claimed.wait)));
+      // 协调器满额时下发的是指数退避（最长 30 秒）。客户端必须原样遵守：
+      // 固定短轮询会在 20 节点拓扑下把空闲节点变成持续的控制面风暴。
+      const wait = Number(claimed.wait);
+      await new Promise(resolve => setTimeout(resolve, Number.isFinite(wait) && wait > 0 ? Math.min(30_000, wait) : 3000));
       continue;
     }
     slug = claimed.slug;

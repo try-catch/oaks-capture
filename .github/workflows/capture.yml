@@ -1,19 +1,14 @@
 name: 3 OAKS durable capture
-run-name: 3 OAKS ${{ inputs.mode || 'capture' }} max=${{ inputs.mode == 'benchmark' && inputs.max_claims || 'stable' }} spacing=${{ inputs.mode == 'benchmark' && inputs.node_spacing_ms || '250' }}ms
+run-name: 3 OAKS ${{ inputs.mode || 'capture' }} max=6 spacing=${{ inputs.mode == 'benchmark' && inputs.node_spacing_ms || '250' }}ms
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: check 验证；capture 正式采集；benchmark 做 15 分钟阶梯测试
+        description: check 验证；capture 正式采集；benchmark 只缩短预算，不能放大并发
         type: choice
         options: [check, capture, benchmark]
         default: check
-      max_claims:
-        description: benchmark 同时活跃会话数；其它模式使用稳定档变量
-        type: choice
-        options: ['6', '10', '20', '40', '60', '80', '100', '120']
-        default: '6'
       node_spacing_ms:
         description: benchmark 单节点请求最短间隔；其它模式固定使用 250ms
         type: choice
@@ -44,9 +39,9 @@ env:
   # 官方 demo 后端只容忍少量并发游戏会话：实测 107 个会话时 103 个游戏立刻
   # 返回 GAME_REOPENED，而 6 个会话时成功率为 97%。这里限制的是同时活跃的
   # 游戏会话数，不是线程数。
-  # 测试服发生过 Mongo 连接和写入过载；正式采集先固定 6 个写入者，只有单独
-  # benchmark 才允许人工提高，不能由仓库变量在无人监督时放大。
-  OAKS_MAX_CLAIMS: ${{ inputs.mode == 'benchmark' && inputs.max_claims || '6' }}
+  # 测试服发生过 Mongo 连接和写入过载，且基线长期过载：6 是硬限制，写成字面量，
+  # 任何派发参数（含 benchmark）都不能放大它。
+  OAKS_MAX_CLAIMS: '6'
   # 常驻长连接：单次协调往返从 1-2 秒降到毫秒级。1 启用，0 关闭。
   OAKS_PERSISTENT_CHANNEL: '1'
 

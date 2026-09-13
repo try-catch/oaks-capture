@@ -10,7 +10,9 @@ const coordinator = fs.readFileSync(path.join(root, "actions", "coordinator.py")
 
 test("采集仅由外部监督器派发并保留 check/capture/benchmark 入口", () => {
   assert.match(workflow, /options:\s*\[check, capture, benchmark\]/);
-  assert.match(workflow, /options:\s*\['6', '10', '20', '40', '60', '80', '100', '120'\]/);
+  // benchmark 只能收紧节奏，不能放大并发，因此不再有 max_claims 输入。
+  assert.doesNotMatch(workflow, /inputs\.max_claims/);
+  assert.doesNotMatch(workflow, /'40', '60', '80'/);
   assert.doesNotMatch(workflow, /schedule:/);
   assert.doesNotMatch(workflow, /push:/);
 });
@@ -45,7 +47,8 @@ test("不会自动派发下一轮形成排队积压", () => {
 
 test("同时活跃的官方会话数受限，不能等于线程总数", () => {
   // 实测 107 个并发会话 → 103 个游戏立刻 GAME_REOPENED；6 个会话时成功率 97%。
-  assert.match(workflow, /OAKS_MAX_CLAIMS:\s*\$\{\{ inputs\.mode == 'benchmark' && inputs\.max_claims \|\| '6' \}\}/);
+  // 必须是字面量：6 是硬限制，任何派发参数（含 benchmark）都不能放大。
+  assert.match(workflow, /OAKS_MAX_CLAIMS:\s*'6'/);
   assert.doesNotMatch(workflow, /vars\.OAKS_STABLE_MAX_CLAIMS/);
   assert.match(workflow, /OAKS_DEADLINE_MINUTES:\s*\$\{\{ inputs\.mode == 'benchmark' && '15' \|\| '45' \}\}/);
   assert.match(worker, /maxClaims: numberFromEnv\('OAKS_MAX_CLAIMS', 6\)/);

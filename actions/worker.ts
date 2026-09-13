@@ -182,14 +182,13 @@ async function runThread(): Promise<void> {
   const { captureGame } = await import('../oaks');
   const registry = await readRegistry();
   installDurability();
-  let claimFailures = 0;
+  deadline = Date.now() + numberFromEnv('OAKS_DEADLINE_MINUTES', 40) * 60_000;
   while (!stopping) {
     let claimed: any;
     try {
       claimed = rpc('claim');
-      claimFailures = 0;
     } catch (error) {
-      if (++claimFailures >= 3) throw error;
+      if (stopped()) break;
       await new Promise(resolve => setTimeout(resolve, 1000));
       continue;
     }

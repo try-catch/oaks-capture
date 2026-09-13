@@ -53,7 +53,7 @@ test("同时活跃的官方会话数受限，不能等于线程总数", () => {
 test("begin 把线程与节点拓扑交给协调器作为并发预算", () => {
   assert.match(worker, /maxInFlight:\s*threads \* nodes/);
   assert.match(workflow, /OAKS_THROTTLE_LIMIT:\s*'4'/);
-  assert.match(worker, /throttleLimit:\s*numberFromEnv\('OAKS_THROTTLE_LIMIT', 4\)/);
+  assert.match(worker, /throttleLimit:\s*Math\.min\(numberFromEnv\('OAKS_THROTTLE_LIMIT', 4\), Math\.ceil\(threads \/ 2\)\)/);
   assert.match(coordinator, /DEFAULT_THROTTLE_LIMIT = 4/);
 });
 
@@ -84,5 +84,6 @@ test("采集 Runner 仍然禁止代理出口并强制 GitHub-hosted", () => {
 });
 
 test("空闲线程的协调连接短暂失败不会直接拖垮整个 Runner", () => {
-  assert.match(worker, /if \(\+\+claimFailures >= 3\) throw error/);
+  assert.match(worker, /deadline = Date\.now\(\) \+ numberFromEnv\('OAKS_DEADLINE_MINUTES', 40\) \* 60_000/);
+  assert.match(worker, /catch \(error\) \{\s*if \(stopped\(\)\) break;\s*await new Promise/);
 });

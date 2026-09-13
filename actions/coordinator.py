@@ -259,6 +259,8 @@ class Store:
         state.setdefault('nodeThrottle', {})
         state.setdefault('halted', {})
         state.setdefault('rateNodes', [])
+        state.setdefault('metrics', {'startedAt': now, 'documentsWritten': 0, 'responses': 0,
+                                     'http429': 0, 'businessErrors': {}})
         # begin 总会重写 topology；这里给旧状态一个保守占位，避免升级期间放大并发。
         state.setdefault('topology', {'nodeMs': DEFAULT_NODE_SPACING_MS, 'throttleLimit': DEFAULT_THROTTLE_LIMIT,
                                       'maxInFlight': 1, 'maxClaims': 6})

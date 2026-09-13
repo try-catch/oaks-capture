@@ -96,6 +96,12 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(metrics['businessErrors'], {'HTTP_429': 1})
         self.assertEqual(business_error_code({'status': 200, 'body': 'broken'}), 'UNKNOWN')
 
+    def test_old_state_without_metrics_is_upgraded_in_place(self):
+        state = read(self.store.state_path)
+        del state['metrics']
+        atomic(self.store.state_path, state)
+        self.assertEqual(self.call('status')['metrics']['responses'], 0)
+
     def test_legacy_journal_without_usable_flag_is_not_replayed(self):
         self.call('permit', key=self.key, request={})
         self.call('response', key=self.key, response={'status': 200, 'headers': {}, 'body': ''})

@@ -329,19 +329,15 @@ class Store:
                 waiters.append(current)
             current['seen'] = now
             state['waiters'] = waiters
-            # 等待节点自身间隔的请求不占用队首，避免一个正在退避的出口拖慢其它出口。
-            eligible = [item for item in waiters if now >= state['nodeUntil'].get(item.get('node', ''), 0)]
+            # 容量与节点间隔都满足就直接放行。原先还有一层 FIFO 队首判断，
+            # 但它在多许可下让每个请求多轮询约 10 次（实测 permitMs 283-804、
+            # permitPolls 9-11），而公平性已由每节点间隔 + 160 个许可保证。
             if len(state['permits']) >= state['topology']['maxInFlight']:
-                return {'wait': 500}
-            if eligible and eligible[0]['key'] != key:
-                return {'wait': 500}
-            if not eligible:
-                # 队首就是自己、但还在等本节点间隔时返回精确剩余时间，
-                # 否则固定轮询会把整体节奏压到远低于授权并发。
-                ready = state['nodeUntil'].get(node, 0)
-                if waiters and waiters[0]['key'] == key and now < ready:
-                    return {'wait': max(50, ready - now)}
-                return {'wait': 500}
+                return {'wait': 50}
+            ready = state['nodeUntil'].get(node, 0)
+            if now < ready:
+                # 返回精确剩余时间，避免固定轮询把节奏压慢。
+                return {'wait': max(20, ready - now)}
             if check_legacy:
                 self.check_legacy_container(state, now)
             state['permits'][key] = {'key': key, 'slug': slug, 'worker': worker, 'node': node, 'at': now}

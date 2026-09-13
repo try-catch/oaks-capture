@@ -204,24 +204,32 @@ class RecoveryTests(unittest.TestCase):
         self.call('done', status='incomplete', count=1)
         self.assertEqual(self.call('claim')['slug'], 'two')
 
-    def test_fifo_prevents_fast_worker_starvation_and_expires_only_waiters(self):
+    def test_capacity_grants_on_first_call_without_polling(self):
+        # 有多余许可时必须一次调用就放行：FIFO 队首判断曾让每个请求多轮询约 10 次
+        # （实测 permitMs 283-804 毫秒、permitPolls 9-11）。
         self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)
-        second = dict(op='permit', run='100-1', worker='2', slug='two', key='b' * 64, request={})
-        self.call('permit', key=self.key, request={})
-        self.assertIn('wait', self.store.call(second, check_legacy=False))
-        self.call('response', key=self.key, response={'status': 200, 'headers': {}, 'body': ''})
+        self.assertTrue(self.call('permit', key=self.key, request={})['granted'])
         state = read(self.store.state_path)
         state['nodeUntil'] = {}
+        state['topology']['maxInFlight'] = 4
         atomic(self.store.state_path, state)
-        self.assertIn('wait', self.call('permit', key='c' * 64, request={}))
+        second = dict(op='permit', run='100-1', worker='2', slug='two', key='b' * 64, request={})
         self.assertTrue(self.store.call(second, check_legacy=False)['granted'])
+        self.assertEqual(sorted(read(self.store.state_path)['permits']), sorted([self.key, 'b' * 64]))
+
+    def test_spacing_limited_node_waits_precisely_and_does_not_block_others(self):
+        # 一个出口在退避时只等它自己，并拿到精确剩余时间，而不是拖住其它出口。
+        self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)
+        self.call('permit', key=self.key, request={})
+        self.call('response', key=self.key, response={'status': 200, 'headers': {}, 'body': ''})
         state = read(self.store.state_path)
-        state['waiters'][0]['seen'] = 0
+        state['nodeUntil']['1'] = time.time() * 1000 + 2000
+        state['nodeUntil'].pop('2', None)
         atomic(self.store.state_path, state)
-        self.assertIn('wait', self.call('permit', key='d' * 64, request={}))
-        state = read(self.store.state_path)
-        self.assertEqual(list(state['permits']), ['b' * 64])
-        self.assertEqual([item['key'] for item in state['waiters']], ['d' * 64])
+        mine = self.call('permit', key='c' * 64, request={})['wait']
+        self.assertGreater(mine, 0)
+        self.assertLessEqual(mine, 2000)
+        self.assertTrue(self.store.call({'op': 'permit', 'run': '100-1', 'worker': '2', 'slug': 'two', 'key': 'b' * 64, 'request': {}}, check_legacy=False)['granted'])
 
     def test_short_cooldown_waits_without_assigning_games(self):
         state = read(self.store.state_path)

@@ -44,9 +44,8 @@ env:
   # 返回 GAME_REOPENED，而 6 个会话时成功率为 97%。这里限制的是同时活跃的
   # 游戏会话数，不是线程数。
   OAKS_MAX_CLAIMS: '6'
-  # 常驻长连接可把单次协调往返从 1-2 秒降到毫秒级，但阻塞读管道在 Runner 上
-  # 实测会让线程卡住（租约被占住却不发请求），先关闭，等本地测试覆盖后再启用。
-  OAKS_PERSISTENT_CHANNEL: '0'
+  # 常驻长连接：单次协调往返从 1-2 秒降到毫秒级。1 启用，0 关闭。
+  OAKS_PERSISTENT_CHANNEL: '1'
 
 jobs:
   prepare:

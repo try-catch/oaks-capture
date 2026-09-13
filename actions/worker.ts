@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { isIP } from 'node:net';
-import { spawnSync, spawn, fork, ChildProcess } from 'node:child_process';
+import { spawnSync, fork } from 'node:child_process';
 import { installCaptureRuntime, PendingRound } from '../src/capture-runtime';
+import { CoordinatorChannel } from '../src/coordinator-channel';
 
 const root = path.resolve(__dirname, '..');
 const run = `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
@@ -24,69 +25,15 @@ const timing = { permit: 0, fetch: 0, respond: 0, append: 0, polls: 0, documents
 process.on('SIGTERM', () => { stopping = true; });
 process.on('SIGINT', () => { stopping = true; });
 
-// 常驻协调通道：一条 SSH 长连接上按 JSON 行收发，不再每次调用都新起
-// ssh + sudo + python 进程（实测单次 1-2 秒，是一轮三个往返的主要成本）。
-// 每条线程独占一个进程与一条通道，因此通道内永远是单调的请求-响应。
-// 任何异常都退回原来的单次调用，通道故障不会影响采集。
-const COORDINATOR = 'sudo python3 -u /api/api_new/tools/capture-oaks/actions/coordinator.py';
-
-class CoordinatorChannel {
-  private child?: ChildProcess;
-  private buffer = '';
-
-  constructor(private readonly serve: boolean) {}
-
-  private start(): void {
-    const args = ['-F', process.env.OAKS_SSH_CONFIG!, 'oaks-store', this.serve ? `${COORDINATOR} --serve` : COORDINATOR];
-    const child = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'inherit'] });
-    for (const stream of [child.stdout, child.stdin]) {
-      const handle = (stream as unknown as { _handle?: { setBlocking?: (value: boolean) => void } })?._handle;
-      if (handle?.setBlocking) handle.setBlocking(true);
-    }
-    child.on('exit', () => { if (this.child === child) this.child = undefined; });
-    this.child = child;
-    this.buffer = '';
-  }
-
-  /** 常驻模式下发送一行并读回一行响应；单次模式退化为一次 spawnSync。 */
-  call(payload: string): any {
-    if (!this.serve) return this.oneShot(payload);
-    try {
-      if (!this.child) this.start();
-      const child = this.child!;
-      // 运行时管道流带 fd（类型定义里没有），只在常驻模式下用于阻塞读写。
-      const stdin = (child.stdin as unknown as { fd: number }).fd;
-      const stdout = (child.stdout as unknown as { fd: number }).fd;
-      fs.writeSync(stdin, payload + '\n');
-      const chunk = Buffer.alloc(256 * 1024);
-      while (true) {
-        const newline = this.buffer.indexOf('\n');
-        if (newline >= 0) {
-          const line = this.buffer.slice(0, newline);
-          this.buffer = this.buffer.slice(newline + 1);
-          return JSON.parse(line);
-        }
-        const read = fs.readSync(stdout, chunk, 0, chunk.length, null);
-        if (read === 0) throw new Error('协调通道已关闭');
-        this.buffer += chunk.subarray(0, read).toString('utf8');
-      }
-    } catch {
-      this.child = undefined;
-      return this.oneShot(payload);
-    }
-  }
-
-  private oneShot(payload: string): any {
-    const result = spawnSync('ssh', ['-F', process.env.OAKS_SSH_CONFIG!, 'oaks-store', COORDINATOR], {
-      input: payload, encoding: 'utf8', maxBuffer: 128 * 1024 * 1024, timeout: 45_000,
-    });
-    if (result.error) throw new Error('测试服持久化通道不可用');
-    try { return JSON.parse(result.stdout); } catch { throw new Error('测试服协调器未返回有效确认'); }
-  }
-}
-
+// 协调通道：常驻模式下在一条 SSH 长连接上按 JSON 行收发，把单次往返从
+// 1-2 秒（新起 ssh+sudo+python）降到毫秒级；异常自动退回单次调用。
+// 每条线程独占一个实例与一条管道，因此管道内永远是单调的请求-响应。
+const COORDINATOR = '/api/api_new/tools/capture-oaks/actions/coordinator.py';
 // 默认启用；显式设为 0 才关闭（numberFromEnv 会把 0 当作无效值回落到默认，不能用它）。
-const channel = new CoordinatorChannel(process.env.OAKS_PERSISTENT_CHANNEL !== '0');
+const channel = new CoordinatorChannel({
+  persistent: ['ssh', '-F', process.env.OAKS_SSH_CONFIG!, 'oaks-store', `sudo python3 -u ${COORDINATOR} --serve`],
+  oneShot: ['ssh', '-F', process.env.OAKS_SSH_CONFIG!, 'oaks-store', `sudo python3 ${COORDINATOR}`],
+}, process.env.OAKS_PERSISTENT_CHANNEL !== '0');
 
 function rpc(op: string, data: Record<string, unknown> = {}): any {
   const payload = JSON.stringify({ op, run, worker, node, slug, runner: { name: process.env.RUNNER_NAME, environment: process.env.RUNNER_ENVIRONMENT, egress }, ...data });

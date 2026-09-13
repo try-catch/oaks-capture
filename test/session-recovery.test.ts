@@ -70,16 +70,19 @@ test("丢弃未完成局必须同时清掉请求日志键，否则重新登录�
 });
 
 test("协调走常驻长连接，异常时回退单次调用", () => {
+  const channelSource = fs.readFileSync(path.resolve(__dirname, "..", "src", "coordinator-channel.ts"), "utf8");
   // 单次调用要新起 ssh+sudo+python，实测每次 1-2 秒，是一轮三个往返的主要成本。
   assert.match(worker, /COORDINATOR\} --serve/);
-  // numberFromEnv 把 0 当无效值回落默认，开关必须用字符串比较。
+  assert.match(worker, /CoordinatorChannel/);
+  // 默认启用；显式设为 0 才关闭（numberFromEnv 把 0 当无效值回落默认）。
   assert.match(worker, /process\.env\.OAKS_PERSISTENT_CHANNEL !== '0'/);
   assert.doesNotMatch(worker, /numberFromEnv\('OAKS_PERSISTENT_CHANNEL'/);
-  assert.match(worker, /class CoordinatorChannel/);
-  // 阻塞读需要把管道设为阻塞模式，否则 readSync 会抛 EAGAIN。
-  assert.match(worker, /setBlocking\(true\)/);
+  // 阻塞读写必须用 handle 上的 fd：子进程管道的 .fd 是 undefined（实测踩过，
+  // 结果每次都静默回退，还会留下一堆半死的 ssh 进程把 sshd 拖垮）。
+  assert.match(channelSource, /_handle\?\.fd/);
+  assert.match(channelSource, /setBlocking\(true\)/);
   // 通道任何异常都必须退回单次调用，且单次调用仍然校验 ok。
-  assert.match(worker, /return this\.oneShot\(payload\)/);
+  assert.match(channelSource, /return this\.oneShot\(payload\)/);
   assert.match(worker, /协调器拒绝操作/);
 });
 

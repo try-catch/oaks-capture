@@ -35,6 +35,7 @@ test("会话重开与结果未知都只丢弃这一局，普通错误仍然直�
   assert.equal(recoverableRoundError(new Error('play/spin: {"code":"GAME_REOPENED"}')), true);
   assert.equal(recoverableRoundError(new Error("协调器拒绝操作: 存在结果未知的官方请求，已隔离，禁止自动重放")), true);
   assert.equal(recoverableRoundError(new Error("已缓存的官方响应为业务失败: SERVER_ERROR")), true);
+  assert.equal(recoverableRoundError(new ProtocolStatusError("SERVER_ERROR", "play: server error")), true);
   assert.equal(recoverableRoundError(new ProtocolStatusError("FUNDS_EXCEED", "play: funds")), false);
   assert.equal(recoverableRoundError(new Error("结果缺少当前局 total_win/round_win")), false);
 });

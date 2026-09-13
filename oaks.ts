@@ -48,14 +48,14 @@ export function selectedModeTypes(expected: number[], requested: number[]): numb
 }
 
 // 官方会话被重开后，当前这一局已经无法完成，但游戏本身可以继续。
-const SESSION_INVALID_CODES = ["GAME_REOPENED", "GAME_CLOSED", "SESSION_EXPIRED", "SESSION_NOT_FOUND"];
+const RECOVERABLE_ROUND_CODES = ["GAME_REOPENED", "GAME_CLOSED", "SESSION_EXPIRED", "SESSION_NOT_FOUND", "SERVER_ERROR"];
 
 // “这一局不能再用了”的原因：官方业务失败（含会话重开），
 // 或协调器判定上一轮结果未知而拒绝重放。两种情况都只需丢弃未完成帧并重新登录。
 export function recoverableRoundError(error: unknown): boolean {
-  if (error instanceof ProtocolStatusError) return SESSION_INVALID_CODES.includes(error.code);
+  if (error instanceof ProtocolStatusError) return RECOVERABLE_ROUND_CODES.includes(error.code);
   const message = error instanceof Error ? error.message : String(error);
-  return SESSION_INVALID_CODES.some((code) => message.includes(code))
+  return RECOVERABLE_ROUND_CODES.some((code) => message.includes(code))
     || message.includes("业务失败")
     || message.includes("禁止自动重放");
 }

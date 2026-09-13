@@ -58,6 +58,11 @@ function numberFromEnv(name: string, fallback: number): number {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
+function activeThreads(): number {
+  const nodes = numberFromEnv('OAKS_NODES', 1);
+  const maxClaims = numberFromEnv('OAKS_MAX_CLAIMS', 6);
+  return Math.min(numberFromEnv('OAKS_THREADS', 8), Math.ceil(maxClaims / nodes));
+}
 function requireProviderAuthorization(): void {
   if (process.env.OAKS_PROVIDER_AUTHORIZED !== 'true') {
     throw new Error('真实采集需要服务商书面授权并设置 OAKS_PROVIDER_AUTHORIZED=true');
@@ -254,7 +259,7 @@ async function supervise(): Promise<void> {
   requireProviderAuthorization();
   egress = await fetch('https://api.ipify.org', { signal: AbortSignal.timeout(10_000) }).then(response => response.text());
   if (!isIP(egress.trim())) throw new Error('无法核实 Runner 出口');
-  const threads = numberFromEnv('OAKS_THREADS', 8);
+  const threads = activeThreads();
   console.log(JSON.stringify({ node, threads, runnerEnvironment: process.env.RUNNER_ENVIRONMENT, egress: egress.trim() }));
   const children = Array.from({ length: threads }, (_value, index) => fork(__filename, ['thread'], {
     execArgv: process.execArgv,
@@ -275,7 +280,7 @@ async function main(): Promise<void> {
   if (mode === 'begin') {
     requireGithubHosted();
     requireProviderAuthorization();
-    const threads = numberFromEnv('OAKS_THREADS', 8);
+    const threads = activeThreads();
     const nodes = numberFromEnv('OAKS_NODES', 1);
     try {
       console.log(JSON.stringify(rpc('begin', {
@@ -283,7 +288,7 @@ async function main(): Promise<void> {
       threads,
       nodes,
       nodeMs: numberFromEnv('OAKS_NODE_SPACING_MS', 250),
-      throttleLimit: numberFromEnv('OAKS_THROTTLE_LIMIT', 4),
+      throttleLimit: Math.min(numberFromEnv('OAKS_THROTTLE_LIMIT', 4), Math.ceil(threads / 2)),
       maxInFlight: threads * nodes,
       // 同时活跃的官方游戏会话数必须限制：demo 后端在大量并发会话时返回 GAME_REOPENED。
       maxClaims: numberFromEnv('OAKS_MAX_CLAIMS', 6),

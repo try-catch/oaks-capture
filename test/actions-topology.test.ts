@@ -34,6 +34,7 @@ test("单个节点按线程数并发，节点数与矩阵一致", () => {
   assert.equal(matrix.split(",").length, 20);
   assert.match(worker, /numberFromEnv\('OAKS_THREADS', 8\)/);
   assert.match(worker, /fork\(__filename, \['thread'\]/);
+  assert.match(worker, /Math\.min\(numberFromEnv\('OAKS_THREADS', 8\), Math\.ceil\(maxClaims \/ nodes\)\)/);
 });
 
 test("不会自动派发下一轮形成排队积压", () => {

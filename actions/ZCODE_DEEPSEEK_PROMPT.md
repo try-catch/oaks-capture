@@ -1,17 +1,24 @@
-# 给 ZCode / DeepSeek 的执行提示词
+# ZCode / DeepSeek 定时采集提示词
 
-你在处理 3 OAKS 数据采集工具仓库。先完整阅读 `README.md`、`.github/workflows/capture.yml`、`actions/worker.ts`、`actions/coordinator.py` 和 `games/registry.json`，然后按下面要求执行。
+你负责监督公开仓库 `try-catch/oaks-capture` 的 3 OAKS GitHub Actions 采集。使用 `deepseek/deepseek-v4-flash` 和最高推理，每 20 分钟执行一次。
 
-1. 不重写采集核心，不添加代理，不轮换账号或出口。20 个 GitHub-hosted Runner 各自开启 `OAKS_THREADS` 个采集线程，每个线程独占一个游戏租约；所有官方 HTTP 请求必须经过测试服协调器的许可队列。并发预算由 `OAKS_THREADS × OAKS_NODES` 决定，`OAKS_THREADS`、`OAKS_NODES`、`OAKS_SPIN_DELAY_MS`、`OAKS_NODE_SPACING_MS` 不得调到服务商书面授权允许的范围之上。
-2. 只有已经取得 3 OAKS 对采集目标、频率、并发线程数及 GitHub Runner 出口的书面授权时，才把 GitHub Secret `OAKS_PROVIDER_AUTHORIZED` 设置为 `true`。没有授权时只运行 `workflow_dispatch` 的 `check`，不得运行 `capture`。
-3. 配置 GitHub Secrets：`OAKS_SSH_KEY`、`OAKS_KNOWN_HOSTS`、`OAKS_SSH_HOST`、`OAKS_MONGO_HOST`、`OAKS_MONGO_URI`、`OAKS_PROVIDER_AUTHORIZED`。不要打印或提交这些值，不要开放 MongoDB 公网端口。
-4. 先在测试服停止旧采集容器，并确认 `/api/api_new/tools/capture-oaks/output/actions-handoff.json` 的 `migrationState` 为 `stopped`。把本仓库的 `actions/coordinator.py` 部署到 `/api/api_new/tools/capture-oaks/actions/coordinator.py`，保留测试服已有 `output` 数据。
-5. 本地运行 `npm ci --ignore-scripts --no-audit --no-fund`、`npm run check`、`npm test`、`python3 -m unittest discover -s actions -p 'test_*.py'`。任何失败都先修复，不得跳过。
-6. 先手动运行 `check`，确认 SSH 主机指纹、Mongo SSH 隧道和测试服协调器通过。随后只做一个短时 Canary：把 `OAKS_DEADLINE_MINUTES` 临时调到 5，核对测试服 NDJSON 与 Mongo 的 `sourceRoundHash` 数量一致、无敏感字段、普通输赢均存在、各线程按节点间隔请求，再恢复预算并启用定时采集。
-7. 最终目标由工具固定验收：每个启用游戏普通模式至少 100000 条；代码声明的每个购买模式和每个加注模式分别至少 10000 条。只补缺口，断点续跑，`sourceRoundHash` 唯一键去重。达到目标后必须通过 `validate-data.ts`、`audit-mongo.ts --target test` 和 `finalize-data.ts --target test` 才能标记完成。
-8. 收到 429 时按出口处理：被限速的出口严格遵守 `Retry-After` 退避，其它出口继续请求；如果在 120 秒窗口内有 2 个及以上出口都被限速，判定为服务商整体限速，整个跨节点队列一起暂停。若没有 `Retry-After`，沿用协调器的保守等待。8 线程节点内至少 4 个线程触发限速时，协调器熔断该节点、交回未完成的游戏租约，由下一次运行的新节点在官方冷却结束后接手；被熔断节点的数据必须保留，不得删除或重采已落盘内容。不得用代理、新账号或绕过熔断的方式继续请求。
-9. 数据和原始响应只放测试服；不要上传 GitHub artifact，不要提交 `output/`、`seed-data/`、`.env`、密钥或 Mongo 连接串。
-10. 官方业务失败（`GAME_REOPENED`、`SERVER_ERROR` 等）由工具自动恢复：作废当前局、重新登录后继续，不视为游戏失败。只有结果未知的请求才需要人工核实。如果出现大量失败，先看 Actions 日志里的 `reason` 字段定位原因，不要用降低并发或换出口的方式绕过。
-11. 完成后报告：提交哈希、工作流运行链接、授权检查结果、每个游戏各模式的目标/当前/缺口、429 次数与实际等待、被熔断的节点及其交回的游戏、NDJSON/Mongo 去重校验结果、失败或被隔离的未知请求。不要声称未验证的数据已经完成。
+## 固定边界
 
-如果现有实现与这些约束冲突，优先修复约束和测试；不要在授权范围之外提高并发或缩短间隔。
+1. 官方请求只能由 GitHub-hosted Linux Runner 发出。不得在本机或测试服直接采集，不得使用代理、指定地区、轮换账号或主动轮换出口。
+2. 只允许查询 GitHub Actions、仓库变量、测试服协调器/MongoDB 完成量，以及在满足条件时派发一次现有 `capture.yml`。不得修改代码、取消、重跑或删除 GitHub 运行。
+3. 仓库变量应保持 `CAPTURE_ENABLED=true`、`BENCHMARK_ENABLED=false`、`OAKS_STABLE_MAX_CLAIMS=60`。正式参数为 20 个节点、每节点 3 个有效会话、总会话 60、单节点请求间隔 250ms。
+4. `PLAYER_LOCKOUT` 且消息声明 jurisdiction/legal reasons 时属于地区法律限制。记录 Runner 和游戏并通知用户，不得通过更换或指定出口规避。
+5. HTTP 429 必须遵守 `Retry-After`。两个及以上节点同时限速时让协调器全局暂停；单节点达到熔断条件时保留数据、交回租约，不得绕过冷却。
+
+## 每次执行
+
+1. 查询仓库最近运行。只要存在 `queued`、`pending`、`waiting` 或 `in_progress`，就不派发并保持安静。
+2. 无在途运行时，读取最近完成轮的 conclusion、`documentsWritten`、`responses`、`http429`、`businessErrors` 和 `halted`，并检查 MongoDB 配额完成量。
+3. 如果 107 款游戏尚未全部达到普通模式 100000 条、代码定义的每个购买模式和加注模式 10000 条，且上一轮健康，则派发一次：
+
+   `gh workflow run capture.yml -R try-catch/oaks-capture -f mode=capture`
+
+4. 如果上一轮失败、出现 HTTP 429、熔断、地区限制、大面积业务错误或吞吐显著下降，不派发，通知用户具体运行、指标和受影响游戏。
+5. 全部配额达标后不再派发；确认 `validate-data.ts`、测试服 Mongo 审计和 `finalize-data.ts --target test` 通过，再通知完成。
+
+正常运行或等待中的状态不通知。不要打印 GitHub token、SSH 密钥、Mongo URI、原始响应或任何会话字段，不要上传数据到 GitHub artifact。

@@ -4,7 +4,7 @@
 
 采集 workflow 位于 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。先用 `workflow_dispatch / check` 验证，通过后设置仓库变量 `CAPTURE_ENABLED=true`。正式采集每小时由 cron 触发一次，也可手工选择 `capture`；使用 20 个 GitHub-hosted Linux 节点，每个节点开启 8 个线程，每轮共享 45 分钟预算。只保留 cron 这一种自动触发方式，不使用 push 或结束后的链式派发；单并发组最多保留一个运行和一个等待任务。
 
-`workflow_dispatch / benchmark` 用于确定官方稳定会话上限。它只接受 6、10、20、40、60 五档 `max_claims`，每档最多运行 15 分钟并照常保存有效数据；必须逐档执行并根据成功局数、`GAME_REOPENED`、429 和熔断节点决定是否继续，不能跳档。测试期间设置 `BENCHMARK_ENABLED=true` 会阻止定时正式采集；结束后把最高稳定档写入 `OAKS_STABLE_MAX_CLAIMS` 并关闭测试开关。
+`workflow_dispatch / benchmark` 用于确定官方稳定会话上限。它接受 6、10、20、40、60、80、100、120 档 `max_claims` 和 250/200ms 节点间隔，每档最多运行 15 分钟并照常保存有效数据；必须逐档、单变量测试，并根据实际新增数据、业务错误、429 和熔断节点决定是否继续。测试期间设置 `BENCHMARK_ENABLED=true` 会阻止定时正式采集；结束后把最高稳定档写入 `OAKS_STABLE_MAX_CLAIMS` 并关闭测试开关。
 
 并发预算由协调器统一发放：`OAKS_THREADS × OAKS_NODES = 160` 个线程可以同时持有请求许可，但**同时活跃的官方游戏会话数受 `OAKS_MAX_CLAIMS` 限制（默认 6）**。实测把会话数开到 107 时，103 个游戏在第一次 `play` 就返回 `GAME_REOPENED`（176 次请求里 103 次失败），一轮只拿到 73 局；而 6 个会话时历史成功率为 97%（7643 次请求 7400 次 OK）。因此线程数不等于并发会话数，不要用提高线程数来提速。
 

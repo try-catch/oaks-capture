@@ -177,8 +177,17 @@ async function runThread(): Promise<void> {
   const { captureGame } = await import('../oaks');
   const registry = await readRegistry();
   installDurability();
+  let claimFailures = 0;
   while (!stopping) {
-    const claimed = rpc('claim');
+    let claimed: any;
+    try {
+      claimed = rpc('claim');
+      claimFailures = 0;
+    } catch (error) {
+      if (++claimFailures >= 3) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      continue;
+    }
     if (claimed.stop) break;
     if (claimed.wait) {
       await new Promise(resolve => setTimeout(resolve, Math.min(5000, claimed.wait)));

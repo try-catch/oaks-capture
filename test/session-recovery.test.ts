@@ -43,14 +43,20 @@ test("持久化模式下不再一遇错误就让整个游戏失败", () => {
   const source = fs.readFileSync(path.resolve(__dirname, "..", "oaks.ts"), "utf8");
   // 旧实现在安装 captureRuntime 后直接 throw，导致 Actions 里任何一次会话重开都终结该游戏；
   // 现在只有“不可恢复”的错误才抛出，可恢复的会话失效先丢弃未完成局。
-  assert.match(source, /recoverableRoundError\(error\)\) captureRuntime\.discardPending\(\);\s*\n\s*else if \(captureRuntime\) throw error;/);
+  assert.match(source, /recoverableRoundError\(error\) \|\| retryBuyParameters\)\) captureRuntime\.discardPending\(\);\s*\n\s*else if \(captureRuntime\) throw error;/);
   // 会话建立失败在持久化模式下也必须重试。
   assert.equal(source.match(/if \(captureRuntime\) throw error/g)?.length, 1);
 });
 
+test("购买参数被服务拒绝时会丢弃当前局并使用下一组官方参数重试", () => {
+  const source = fs.readFileSync(path.resolve(__dirname, "..", "oaks.ts"), "utf8");
+  assert.match(source, /retryBuyParameters = message\.includes\("SERVER_ERROR"\) && attemptedAction\?\.name === "buy_spin"/);
+  assert.match(source, /recoverableRoundError\(error\) \|\| retryBuyParameters/);
+});
+
 test("可恢复的会话失效会丢弃未完成局并重新登录", () => {
   const source = fs.readFileSync(path.resolve(__dirname, "..", "oaks.ts"), "utf8");
-  assert.match(source, /recoverableRoundError\(error\)\) captureRuntime\.discardPending\(\)/);
+  assert.match(source, /recoverableRoundError\(error\) \|\| retryBuyParameters\)\) captureRuntime\.discardPending\(\)/);
   assert.match(source, /ACTIONS_BUDGET.*ACTIONS_RATE_LIMIT.*ACTIONS_HALTED/);
 });
 

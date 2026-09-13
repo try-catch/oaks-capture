@@ -81,3 +81,7 @@ test("采集 Runner 仍然禁止代理出口并强制 GitHub-hosted", () => {
   assert.match(worker, /采集仅允许在 GitHub-hosted Linux Runner 执行/);
   assert.match(worker, /真实采集需要服务商书面授权/);
 });
+
+test("空闲线程的协调连接短暂失败不会直接拖垮整个 Runner", () => {
+  assert.match(worker, /if \(\+\+claimFailures >= 3\) throw error/);
+});

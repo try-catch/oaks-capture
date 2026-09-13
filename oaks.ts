@@ -391,7 +391,8 @@ export async function captureGame(
       const message = (error as Error).message;
       // 预算与限速信号必须交回 worker，由它决定退避还是停机。
       if (message === "ACTIONS_BUDGET" || message === "ACTIONS_RATE_LIMIT" || message === "ACTIONS_HALTED") throw error;
-      if (message.includes("SERVER_ERROR") && attemptedAction?.name === "buy_spin") {
+      const retryBuyParameters = message.includes("SERVER_ERROR") && attemptedAction?.name === "buy_spin";
+      if (retryBuyParameters && attemptedAction) {
         const spinType = actionSpinType(attemptedAction);
         if (attemptedAction.params.bet_factor !== undefined) omitBuyFactor.add(spinType);
         else if (typeof attemptedAction.params.selected_mode !== "string") stringBuyMode.add(spinType);
@@ -399,7 +400,7 @@ export async function captureGame(
       }
       // 可恢复的会话失效：丢掉这一局未完成帧后重新登录，不能因此让整个游戏失败。
       // 其余错误在持久化模式下仍然直接抛出，保持“结果未知不自动重放”的约束。
-      if (captureRuntime && recoverableRoundError(error)) captureRuntime.discardPending();
+      if (captureRuntime && (recoverableRoundError(error) || retryBuyParameters)) captureRuntime.discardPending();
       else if (captureRuntime) throw error;
       retries++;
       if (retries > maxRetries) throw new Error(`${game.slug} 连续失败 ${retries} 次: ${(error as Error).message}`);

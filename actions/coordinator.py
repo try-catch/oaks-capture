@@ -274,6 +274,9 @@ class Store:
                 os.fsync(stream.fileno())
             with (private / 'hashes.txt').open('a') as index:
                 index.write(doc['sourceRoundHash'] + '\n')
+            # NDJSON 已 fsync 落盘，就在这里推进恢复点，省掉调用方单独一次 ack 往返。
+            # 若此刻进程崩溃，NDJSON 已领先 Mongo，恢复时会按 NDJSON 补齐 Mongo。
+            atomic(private / 'committed.json', {'sourceRoundHash': doc['sourceRoundHash'], 'run': run, 'at': now})
             return {'written': True}
         if op == 'ack':
             committed = req['hash']

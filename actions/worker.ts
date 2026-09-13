@@ -20,7 +20,7 @@ let egress = process.env.OAKS_EGRESS ?? '';
 // 采集期会屏蔽 console.log 以免把工具日志带进公开 Actions 日志；
 // 但吞吐诊断行只含数字与节点标识，用原始引用绕过屏蔽输出。
 const realLog = console.log.bind(console);
-const timing = { permit: 0, fetch: 0, respond: 0, append: 0, ack: 0, documents: 0 };
+const timing = { permit: 0, fetch: 0, respond: 0, append: 0, polls: 0, documents: 0 };
 process.on('SIGTERM', () => { stopping = true; });
 process.on('SIGINT', () => { stopping = true; });
 
@@ -103,16 +103,11 @@ function installDurability(): void {
           worker, phase: 'timing', docs: n,
           permitMs: Math.round(timing.permit / n), fetchMs: Math.round(timing.fetch / n),
           respondMs: Math.round(timing.respond / n), appendMs: Math.round(timing.append / n),
-          ackMs: Math.round(timing.ack / n),
+          permitPolls: Number((timing.polls / n).toFixed(2)),
         }));
       }
     },
-    acknowledge: document => {
-      const started = Date.now();
-      rpc('ack', { hash: document.sourceRoundHash });
-      timing.ack += Date.now() - started;
-      pending = undefined; requestKey = undefined;
-    },
+    acknowledge: () => { pending = undefined; requestKey = undefined; },
     syncFiles,
     shouldStop: stopped,
   });
@@ -137,6 +132,7 @@ function installDurability(): void {
       if (permit.halted) throw new Error('ACTIONS_HALTED');
       if (permit.stop) throw new Error(permit.until > Date.now() ? 'ACTIONS_RATE_LIMIT' : 'ACTIONS_BUDGET');
       if (permit.granted) break;
+      timing.polls += 1;
       await new Promise(resolve => setTimeout(resolve, Math.min(5000, permit.wait)));
     }
     // 不设置 HTTP/SOCKS 代理：真实 fetch 在 GitHub-hosted Runner 内执行。

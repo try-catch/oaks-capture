@@ -7,7 +7,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
-from coordinator import CONSERVATIVE_WAIT_MS, Store, atomic, node_of, read, retry_after_ms
+from coordinator import CONSERVATIVE_WAIT_MS, Store, atomic, business_error_code, node_of, read, retry_after_ms
 
 
 class RecoveryTests(unittest.TestCase):
@@ -64,6 +64,8 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(len(restored['files']['one.ndjson'].splitlines()), 1)
         self.call('ack', hash='a' * 64)
         self.assertIsNone(self.call('load')['pending'])
+        self.call('done', status='incomplete', count=1)
+        self.assertEqual(self.call('status')['metrics']['documentsWritten'], 1)
 
     def test_response_replay_and_unknown_request_fail_closed(self):
         self.assertTrue(self.call('permit', key=self.key, request={'url': 'https://example.test'})['granted'])
@@ -78,12 +80,21 @@ class RecoveryTests(unittest.TestCase):
         # 官方用 200 + status.code 表示业务失败：重放它会让这一局永久卡死。
         failed = {'status': 200, 'headers': {}, 'body': base64.b64encode(b'{"status":{"code":"GAME_REOPENED"}}').decode()}
         self.call('response', key=self.key, response=failed, usable=False)
+        self.assertEqual(self.call('status')['metrics']['businessErrors'], {'GAME_REOPENED': 1})
         self.clear_node_backoff()
         self.assertTrue(self.call('permit', key=self.key, request={})['granted'])
         # 重新请求后拿到可用响应，之后才允许重放。
         ok = {'status': 200, 'headers': {}, 'body': base64.b64encode(b'{"status":{"code":"OK"}}').decode()}
         self.call('response', key=self.key, response=ok, usable=True)
         self.assertEqual(self.call('permit', key=self.key, request={})['cached'], ok)
+        self.assertEqual(self.call('status')['metrics']['responses'], 2)
+
+    def test_benchmark_metrics_count_http_limit_without_body(self):
+        self.throttle('1', 'one', self.key)
+        metrics = self.call('status')['metrics']
+        self.assertEqual(metrics['http429'], 1)
+        self.assertEqual(metrics['businessErrors'], {'HTTP_429': 1})
+        self.assertEqual(business_error_code({'status': 200, 'body': 'broken'}), 'UNKNOWN')
 
     def test_legacy_journal_without_usable_flag_is_not_replayed(self):
         self.call('permit', key=self.key, request={})

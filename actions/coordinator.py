@@ -1,4 +1,5 @@
 """测试服持久化协调器：只做文件、锁和恢复操作，绝不请求官方接口。"""
+import base64
 import datetime as dt
 import fcntl
 import hashlib
@@ -60,6 +61,19 @@ def retry_after_ms(headers, now):
         return parsedate_to_datetime(value).timestamp() * 1000 - now
     except (ValueError, TypeError):
         return CONSERVATIVE_WAIT_MS
+
+
+def business_error_code(response):
+    """只提取官方业务错误码用于吞吐测试，不记录响应正文。"""
+    try:
+        body = json.loads(base64.b64decode(response.get('body', '')).decode())
+        code = body.get('status', {}).get('code')
+        if code and code != 'OK':
+            return str(code)
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+        pass
+    status = int(response.get('status', 0))
+    return f'HTTP_{status}' if status >= 400 else 'UNKNOWN'
 
 
 def completed_attempt(run, token):
@@ -249,7 +263,7 @@ class Store:
         state.setdefault('topology', {'nodeMs': DEFAULT_NODE_SPACING_MS, 'throttleLimit': DEFAULT_THROTTLE_LIMIT,
                                       'maxInFlight': 1, 'maxClaims': 6})
         if op == 'status':
-            return {key: state.get(key) for key in ('owner', 'until', 'next', 'claims', 'deadline', 'halted', 'topology')} | {
+            return {key: state.get(key) for key in ('owner', 'until', 'next', 'claims', 'deadline', 'halted', 'topology', 'metrics')} | {
                 'permits': len(state['permits']), 'nodeUntil': state['nodeUntil']}
         if not re.fullmatch(r'[0-9]+-[0-9]+', run):
             raise ValueError('非法运行标识')
@@ -285,15 +299,17 @@ class Store:
                 'maxClaims': positive_int(req.get('maxClaims'), 6),
                 'deadline': now + positive_int(req.get('deadlineMinutes'), 40) * 60_000,
             }
+            metrics = {'startedAt': now, 'documentsWritten': 0, 'responses': 0, 'http429': 0, 'businessErrors': {}}
             state.update(owner=run, deadline=topology['deadline'], claims={}, games=games, waiters=[],
-                         permits={}, nodeUntil={}, nodeThrottle={}, halted={}, rateNodes=[], topology=topology)
+                         permits={}, nodeUntil={}, nodeThrottle={}, halted={}, rateNodes=[], topology=topology, metrics=metrics)
             return {'deadline': state['deadline'], 'until': state['until'], 'games': len(games), 'topology': topology}
         if state['owner'] != run:
             raise ValueError('跨环境队列锁不属于当前运行')
         if op == 'end':
             # 仅在 Actions 的所有 worker 已结束后调用。未确认的请求仍保留在日志中，禁止盲目重放。
             state.update(owner=None, permit=None, permits={}, waiters=[])
-            return {'released': True, 'claims': state.get('claims', {}), 'halted': state.get('halted', {})}
+            return {'released': True, 'claims': state.get('claims', {}), 'halted': state.get('halted', {}),
+                    'metrics': state.get('metrics', {})}
         if op in ('claim', 'permit') and node in state['halted']:
             # 该出口已被熔断：立刻停机并保留已落盘数据，由新节点接手续采。
             # 必须早于租约校验，否则被交回租约的线程只会看到普通错误。
@@ -316,7 +332,11 @@ class Store:
                 if manifest.get('complete') is True and audit.get('valid') is True and validation.get('invalid') == 0 and not validation.get('missing', ['unknown']):
                     state['claims'][slug] = {'status': 'already-accepted'}
                     continue
-                state['claims'][slug] = {'worker': worker, 'status': 'running', 'node': node, 'runner': req.get('runner', {})}
+                private = self.directory / slug
+                private.mkdir(parents=True, exist_ok=True, mode=0o700)
+                baseline = len(self.hashes(folder, private, slug))
+                state['claims'][slug] = {'worker': worker, 'status': 'running', 'node': node,
+                                         'runner': req.get('runner', {}), 'baselineCount': baseline}
                 state['cursor'] = state['games'][(state['games'].index(slug) + 1) % len(state['games'])]
                 return {'slug': slug, 'deadline': state['deadline']}
             return {'stop': True}
@@ -374,6 +394,8 @@ class Store:
         if op == 'done':
             state['claims'][slug]['status'] = req['status']
             state['claims'][slug]['count'] = req.get('count', 0)
+            baseline = state['claims'][slug].get('baselineCount', 0)
+            state['metrics']['documentsWritten'] += max(0, int(req.get('count', 0)) - baseline)
             return {}
         key = str(req.get('key', ''))
         if not re.fullmatch(r'[a-f0-9]{64}', key):
@@ -424,8 +446,14 @@ class Store:
             entry['response'] = req['response']
             entry['usable'] = bool(req.get('usable', 200 <= req['response']['status'] < 300))
             self.journal_write(private, key, entry)
+            metrics = state['metrics']
+            metrics['responses'] += 1
+            if not entry['usable']:
+                code = business_error_code(req['response'])
+                metrics['businessErrors'][code] = metrics['businessErrors'].get(code, 0) + 1
             if req['response']['status'] == 429:
                 state['rateCount'] += 1
+                metrics['http429'] += 1
                 wait = max(10_000, retry_after_ms(req['response'].get('headers'), now))
                 # 该出口立即退避并遵守 Retry-After。
                 state['nodeUntil'][node] = max(state['nodeUntil'].get(node, 0), now + wait)

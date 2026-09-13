@@ -8,6 +8,8 @@ on:
         type: choice
         options: [check, capture]
         default: check
+  schedule:
+    - cron: '43 * * * *'
 
 permissions:
   contents: read
@@ -57,7 +59,7 @@ jobs:
       - run: python3 actions/setup-ssh.py
       - run: node -r ts-node/register actions/worker.ts check
       - id: mode
-        if: vars.CAPTURE_ENABLED == 'true' && inputs.mode == 'capture'
+        if: vars.CAPTURE_ENABLED == 'true' && (github.event_name == 'schedule' || inputs.mode == 'capture')
         env:
           OAKS_GITHUB_TOKEN: ${{ github.token }}
         run: |

@@ -2,7 +2,7 @@
 
 公共仓库仅包含采集代码、测试和目录定义。NDJSON、凭据、原始响应及未完成局只保存在测试服，禁止上传 artifact。
 
-采集 workflow 位于 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。GitHub-hosted Runner 恢复期间只保留 `workflow_dispatch` 手工入口，先运行 `check`；确认 Runner 能接单且检查通过后，设置仓库变量 `CAPTURE_ENABLED=true`，再手工选择 `capture`。正式采集使用 20 个 GitHub-hosted Linux 节点，每个节点开启 8 个线程，每轮共享 45 分钟预算。恢复自动调度时只能启用一种触发方式，不能同时使用 cron 和结束后的链式派发。
+采集 workflow 位于 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。先用 `workflow_dispatch / check` 验证，通过后设置仓库变量 `CAPTURE_ENABLED=true`。正式采集每小时由 cron 触发一次，也可手工选择 `capture`；使用 20 个 GitHub-hosted Linux 节点，每个节点开启 8 个线程，每轮共享 45 分钟预算。只保留 cron 这一种自动触发方式，不使用 push 或结束后的链式派发；单并发组最多保留一个运行和一个等待任务。
 
 并发预算由协调器统一发放：`OAKS_THREADS × OAKS_NODES = 160` 个线程可以同时持有请求许可，但**同时活跃的官方游戏会话数受 `OAKS_MAX_CLAIMS` 限制（默认 6）**。实测把会话数开到 107 时，103 个游戏在第一次 `play` 就返回 `GAME_REOPENED`（176 次请求里 103 次失败），一轮只拿到 73 局；而 6 个会话时历史成功率为 97%（7643 次请求 7400 次 OK）。因此线程数不等于并发会话数，不要用提高线程数来提速。
 

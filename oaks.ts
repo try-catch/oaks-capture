@@ -53,6 +53,7 @@ const RECOVERABLE_ROUND_CODES = ["GAME_REOPENED", "GAME_CLOSED", "SESSION_EXPIRE
 // “这一局不能再用了”的原因：官方业务失败（含会话重开），
 // 或协调器判定上一轮结果未知而拒绝重放。两种情况都只需丢弃未完成帧并重新登录。
 export function recoverableRoundError(error: unknown): boolean {
+  if (error instanceof ProtocolHttpError) return error.status >= 500;
   if (error instanceof ProtocolStatusError) return RECOVERABLE_ROUND_CODES.includes(error.code);
   const message = error instanceof Error ? error.message : String(error);
   return RECOVERABLE_ROUND_CODES.some((code) => message.includes(code))

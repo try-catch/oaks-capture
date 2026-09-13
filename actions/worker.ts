@@ -63,6 +63,18 @@ function activeThreads(): number {
   const maxClaims = numberFromEnv('OAKS_MAX_CLAIMS', 6);
   return Math.min(numberFromEnv('OAKS_THREADS', 8), Math.ceil(maxClaims / nodes));
 }
+async function discoverEgress(): Promise<string> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      const value = (await fetch('https://api.ipify.org', { signal: AbortSignal.timeout(10_000) }).then(response => response.text())).trim();
+      if (isIP(value)) return value;
+      lastError = new Error('无法核实 Runner 出口');
+    } catch (error) { lastError = error; }
+    await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+  }
+  throw lastError;
+}
 function requireProviderAuthorization(): void {
   if (process.env.OAKS_PROVIDER_AUTHORIZED !== 'true') {
     throw new Error('真实采集需要服务商书面授权并设置 OAKS_PROVIDER_AUTHORIZED=true');
@@ -256,8 +268,7 @@ async function runThread(): Promise<void> {
 async function supervise(): Promise<void> {
   requireGithubHosted();
   requireProviderAuthorization();
-  egress = await fetch('https://api.ipify.org', { signal: AbortSignal.timeout(10_000) }).then(response => response.text());
-  if (!isIP(egress.trim())) throw new Error('无法核实 Runner 出口');
+  egress = await discoverEgress();
   const threads = activeThreads();
   console.log(JSON.stringify({ node, threads, runnerEnvironment: process.env.RUNNER_ENVIRONMENT, egress: egress.trim() }));
   const children = Array.from({ length: threads }, (_value, index) => fork(__filename, ['thread'], {

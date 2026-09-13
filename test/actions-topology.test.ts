@@ -10,7 +10,7 @@ const coordinator = fs.readFileSync(path.join(root, "actions", "coordinator.py")
 
 test("每小时只调度一次并保留手工 check/capture/benchmark 入口", () => {
   assert.match(workflow, /options:\s*\[check, capture, benchmark\]/);
-  assert.match(workflow, /options:\s*\['6', '10', '20', '40', '60'\]/);
+  assert.match(workflow, /options:\s*\['6', '10', '20', '40', '60', '80'\]/);
   assert.match(workflow, /cron:\s*'43 \* \* \* \*'/);
   assert.doesNotMatch(workflow, /push:/);
 });
@@ -29,6 +29,7 @@ test("单个节点按线程数并发，节点数与矩阵一致", () => {
   assert.match(workflow, /OAKS_NODES:\s*'20'/);
   // 部署节奏是授权的运行参数，代码默认值保持更保守的 2 秒。
   assert.match(workflow, /OAKS_SPIN_DELAY_MS:\s*'1000'/);
+  assert.match(workflow, /OAKS_NODE_SPACING_MS:\s*\$\{\{ inputs\.mode == 'benchmark' && inputs\.node_spacing_ms \|\| '250' \}\}/);
   assert.match(workflow, /max-parallel:\s*20/);
   const matrix = workflow.match(/worker:\s*\[([^\]]+)\]/)?.[1] ?? "";
   assert.equal(matrix.split(",").length, 20);

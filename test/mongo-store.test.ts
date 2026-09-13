@@ -30,8 +30,10 @@ test("MongoDB 建立唯一索引并按 sourceRoundHash upsert", async () => {
 test("历史数量一致时跳过全量 upsert，不一致时分批写入", async () => {
   const documents = Array.from({ length: 3 }, (_, index) => ({ sourceRoundHash: String(index).padStart(64, "a"), data: [index] }));
   let batches = 0;
-  const matching = { async estimatedDocumentCount() { return 3; }, async createIndex() {}, async updateOne() {} };
+  let fastWrites = 0;
+  const matching = { async estimatedDocumentCount() { return 3; }, async createIndex() {}, async updateOne() { fastWrites++; } };
   assert.equal(await syncMongoRounds(matching, documents), 0);
+  assert.equal(fastWrites, 1);
   const repairing = {
     async estimatedDocumentCount() { return 1; }, async createIndex() {}, async updateOne() {},
     async bulkWrite(operations: unknown[]) { batches++; assert.ok(operations.length <= 2); },

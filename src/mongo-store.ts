@@ -60,7 +60,11 @@ export async function syncMongoRounds(collection: MongoCollectionLike, documents
     const hash = String(document.sourceRoundHash ?? sourceRoundHash(document as { gameId?: number; game?: string; data: unknown }));
     return [hash, { ...document, sourceRoundHash: hash }];
   })).values()];
-  if (collection.estimatedDocumentCount && await collection.estimatedDocumentCount() === unique.length) return 0;
+  if (collection.estimatedDocumentCount && await collection.estimatedDocumentCount() === unique.length) {
+    // 快速路径只校验最近恢复点，保持每次认领恒定为一次索引写，而不是重放全部历史。
+    if (unique.length) await upsertMongoRound(collection, unique[unique.length - 1]);
+    return 0;
+  }
   if (!collection.bulkWrite) {
     for (const document of unique) await upsertMongoRound(collection, document);
     return unique.length;

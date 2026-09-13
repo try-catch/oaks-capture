@@ -19,7 +19,7 @@ test("采集严格服从 prepare 输出并保持单队列", () => {
   assert.match(workflow, /if: always\(\) && needs\.prepare\.outputs\.capture == 'true'/);
   assert.match(workflow, /group: oaks-official-single-queue/);
   assert.match(workflow, /cancel-in-progress: false/);
-  assert.match(workflow, /"\$CAPTURE_ENABLED" == true && "\$REQUESTED_MODE" == capture/);
+  assert.match(workflow, /if: vars\.CAPTURE_ENABLED == 'true' && inputs\.mode == 'capture'/);
 });
 
 test("单个节点按线程数并发，节点数与矩阵一致", () => {

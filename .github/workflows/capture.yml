@@ -57,17 +57,12 @@ jobs:
       - run: python3 actions/setup-ssh.py
       - run: node -r ts-node/register actions/worker.ts check
       - id: mode
+        if: vars.CAPTURE_ENABLED == 'true' && inputs.mode == 'capture'
         env:
           OAKS_GITHUB_TOKEN: ${{ github.token }}
-          REQUESTED_MODE: ${{ inputs.mode }}
-          CAPTURE_ENABLED: ${{ vars.CAPTURE_ENABLED }}
         run: |
-          if [[ "$CAPTURE_ENABLED" == true && "$REQUESTED_MODE" == capture ]]; then
-            node -r ts-node/register actions/worker.ts begin
-            echo 'capture=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'capture=false' >> "$GITHUB_OUTPUT"
-          fi
+          node -r ts-node/register actions/worker.ts begin
+          echo 'capture=true' >> "$GITHUB_OUTPUT"
   capture:
     needs: prepare
     if: needs.prepare.outputs.capture == 'true'

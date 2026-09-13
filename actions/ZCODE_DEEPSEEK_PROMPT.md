@@ -14,7 +14,7 @@
 
 1. 查询仓库最近运行。只要存在 `queued`、`pending`、`waiting` 或 `in_progress`，就不派发并保持安静。
 2. 无在途运行时，读取最近完成轮的 conclusion、`documentsWritten`、`responses`、`http429`、`businessErrors` 和 `halted`，并检查 MongoDB 配额完成量。
-3. 派发前做轻量健康门禁：测试服 1 分钟负载低于 CPU 核数的 70%，可用内存至少 8 GiB，`vmstat 1 5` 后四个采样的 swap in/out 均为 0；间隔 30 秒读取两次 Mongo `serverStatus().connections.totalCreated`，增长率不得超过每秒 2 条。历史 swap 占用本身不是故障，不能因此永久停跑。任何一项不满足都不派发。必须连续两个 20 分钟周期满足门禁，才可从暂停状态恢复。
+3. 派发前做轻量健康门禁：测试服 1 分钟负载低于 CPU 核数的 70%，可用内存至少 8 GiB，`vmstat 1 5` 后四个采样的 swap in/out 平均低于 1024 KiB/s；间隔 30 秒读取两次 Mongo `serverStatus().connections.totalCreated`，增长率不得超过每秒 2 条。历史 swap 占用和每秒几十 KiB 的自然换入本身不是故障，不能因此永久停跑。任何一项不满足都不派发。通常必须连续两个 20 分钟周期满足门禁；用户明确要求立即恢复时，可用一次完整健康检查替代等待。
 4. 检查所有待采集 `oaks_*` 数据库的 `simulate` 集合存在 `source_round_hash_unique` 唯一索引。发现缺失时保持采集暂停，每次只给一个集合建索引，完成并确认后才处理下一个，避免批量建索引再次压垮 Mongo；不得在采集运行中建索引。
 5. 如果 107 款游戏尚未全部达到普通模式 100000 条、代码定义的每个购买模式和加注模式 10000 条，且上一轮没有系统性故障并通过上述门禁，则派发一次：
 

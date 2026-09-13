@@ -29,6 +29,8 @@ THREAD_ID = re.compile(r'([0-9]+)\.([0-9]+)')
 LEGACY_CHECK_TTL_MS = 300_000
 # 这些操作不改队列状态，跳过状态回写。
 READ_ONLY_OPS = {'status', 'load', 'pending', 'files', 'append', 'ack'}
+# 这些操作由游戏租约保证单写，可以用各自游戏的锁而不是全局锁（status 除外，它要读一致状态）。
+GAME_LOCAL_OPS = {'load', 'pending', 'files', 'append', 'ack'}
 
 
 def node_of(worker):
@@ -103,8 +105,20 @@ class Store:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.state_path = self.directory / 'queue.json'
 
+    def lock_path(self, request):
+        """按操作选锁：只有会改共享队列状态的操作才需要全局锁。
+
+        load/files/pending/append/ack 都由游戏租约保证单写，走各自游戏的锁，
+        否则它们会白占全局锁——实测全局锁被 fsync 占满后，每轮延迟随并发线性变差。
+        """
+        op = request.get('op')
+        slug = str(request.get('slug') or '')
+        if op in GAME_LOCAL_OPS and re.fullmatch(r'[a-z0-9_]+', slug):
+            return self.directory / (slug + '.game.lock')
+        return self.directory / 'queue.lock'
+
     def call(self, request, check_legacy=True):
-        with (self.directory / 'queue.lock').open('a') as lock:
+        with self.lock_path(request).open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             state = read(self.state_path, {'owner': None, 'until': 0, 'next': 0, 'rateCount': 0, 'permit': None})
             result = self.execute(state, request, check_legacy)

@@ -258,6 +258,17 @@ class RecoveryTests(unittest.TestCase):
         # 两个游戏都已认领，第三次必须返回停止而不是重复分配。
         self.assertTrue(responses[2]['result']['stop'])
 
+    def test_game_local_ops_use_per_game_lock_not_global(self):
+        # 只有会改共享状态的操作才抢全局锁：否则 append/ack 会白占全局锁，
+        # 全局锁被 fsync 占满后每轮延迟随并发线性变差（实测 6→24 会话时每轮 2→7.5 秒）。
+        self.assertEqual(self.store.lock_path({'op': 'append', 'slug': 'one'}).name, 'one.game.lock')
+        self.assertEqual(self.store.lock_path({'op': 'ack', 'slug': 'one'}).name, 'one.game.lock')
+        self.assertEqual(self.store.lock_path({'op': 'load', 'slug': 'one'}).name, 'one.game.lock')
+        for op in ('permit', 'response', 'claim', 'begin', 'end', 'done', 'status'):
+            self.assertEqual(self.store.lock_path({'op': op, 'slug': 'one'}).name, 'queue.lock', op)
+        # 非法 slug 不能用来构造锁文件路径。
+        self.assertEqual(self.store.lock_path({'op': 'append', 'slug': '../../etc/passwd'}).name, 'queue.lock')
+
     def test_pending_without_value_clears_the_incomplete_round(self):
         # 调用方省略 value 时必须按“清空未完成局”处理，而不是报错。
         self.call('pending', value={'id': 'round', 'frames': [{'frame': 1}]})

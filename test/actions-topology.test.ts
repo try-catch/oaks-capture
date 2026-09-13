@@ -10,7 +10,7 @@ const coordinator = fs.readFileSync(path.join(root, "actions", "coordinator.py")
 
 test("每小时只调度一次并保留手工 check/capture/benchmark 入口", () => {
   assert.match(workflow, /options:\s*\[check, capture, benchmark\]/);
-  assert.match(workflow, /options:\s*\['6', '10', '20', '40', '60', '80'\]/);
+  assert.match(workflow, /options:\s*\['6', '10', '20', '40', '60', '80', '100', '120'\]/);
   assert.match(workflow, /cron:\s*'43 \* \* \* \*'/);
   assert.doesNotMatch(workflow, /push:/);
 });

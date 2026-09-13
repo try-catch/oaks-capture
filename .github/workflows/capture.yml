@@ -22,9 +22,11 @@ permissions:
   # （实测配每小时一次时一天只触发 4 次），因此用链式续跑保证连续性。
   actions: write
 
-concurrency:
-  group: oaks-official-single-queue
-  cancel-in-progress: false
+# 并发组暂时去掉：实测它会把新运行卡在 pending，而排队中的旧运行又拿不到 Runner。
+# 互斥仍由协调器的跨运行队列锁保证（第二个 begin 会被拒绝），所以去掉是安全的。
+# concurrency:
+#   group: oaks-official-single-queue
+#   cancel-in-progress: false
 
 env:
   OAKS_SSH_KEY: ${{ secrets.OAKS_SSH_KEY }}

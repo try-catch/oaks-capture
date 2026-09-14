@@ -20,7 +20,9 @@
 
 | 指标 | 通过条件 | 失守动作 |
 | --- | --- | --- |
-| 1 分钟负载 | `load1 < cores × 0.70` | 派发前：不派发；运行中：取消在途 capture |
+| CPU 压力 | `/proc/pressure/cpu` 的 `some avg10 < 70` | 派发前：不派发；运行中：取消在途 capture |
+| I/O 压力 | `/proc/pressure/io` 的 `full avg10 < 20` | 同上 |
+| 内存压力 | `/proc/pressure/memory` 的 `full avg10 < 10` | 同上 |
 | 可用内存 | `MemAvailable ≥ 8 GiB` | 同上 |
 | swap 活动 | `vmstat 1 5` 后四个采样 `si`/`so` 平均 < 1024 KiB/s | 同上 |
 | Mongo 新建连接 | 间隔 30 秒两次 `serverStatus().connections.totalCreated`，增长 ≤ 2 条/秒 | 同上 |
@@ -29,10 +31,11 @@
 协调器自身每 5 秒读取一次 `/proc`，连续两次失守会设置 `serverHalt` 并停止发放新 permit。每轮还必须读取 `serverHealth`/`serverHalt`；一旦 `serverHalt` 非空，即使外部检查暂时恢复也不得继续派发，先让当前轮结束并报告。
 
 历史上已占用大量 swap、或每秒几十 KiB 的自然换入本身不是故障，不得据此永久停跑。判据是**实时交换活动**，不是 swap 占用量。
+同理，短时 D 状态任务会使 `load1` 在恢复后虚高很久。`load1` 只作观测，不得单独停采集；以 PSI、实时 blocked、内存和 swap 活动为准。
 
 ## 每次执行（每 20 分钟）
 
-1. **健康检查先做，且与是否有在途运行无关。** 一次轻量只读检查：CPU 核数、1 分钟负载、可用内存、`vmstat 1 5`、协调器状态（owner/claims/`claimBackoff`/`serverHealth`/`serverHalt`）；并间隔 30 秒读取两次 Mongo `serverStatus().connections.totalCreated` 计算增长率。必须先完成这一条再看运行状态，禁止"发现有在途运行就整轮跳过监控"。
+1. **健康检查先做，且与是否有在途运行无关。** 一次轻量只读检查：CPU 核数、1 分钟负载、CPU/I/O/内存 PSI、可用内存、`vmstat 1 5`、协调器状态（owner/claims/`claimBackoff`/`serverHealth`/`serverHalt`）；并间隔 30 秒读取两次 Mongo `serverStatus().connections.totalCreated` 计算增长率。必须先完成这一条再看运行状态，禁止"发现有在途运行就整轮跳过监控"。
 2. **运行期健康介入：门禁失守时**（上表任一指标不满足），立即按顺序执行：
    1. 取消在途 capture 运行；
    2. 确认其 job 全部进入 `completed`/`cancelled` 且无活跃 job；
@@ -59,6 +62,6 @@
 - 报告负载时必须区分**基线过载**与**采集增量**。判据是采集停止后 `load1` 是否回落、以及 `nr_running` 是否与之匹配，而不是负载绝对值。实测采集完全停止后 `load1` 仍可达 90–114，而同一时刻 `nr_running` 只有 1–5，说明这类高负载来自 `api-server` 的突发连接风暴，不是采集。
 - 不得把全部 load 归因于采集，也不得因为基线高就放大采集并发。
 - 采集侧已消除的增量，若退化即为必须修复的回归：每节点只按预算启动 3 个子进程（总计 60，旧版 160）、满额指数退避（旧版约 50 次/秒空转 claim）、Mongo 连接池 `maxPoolSize=1`、Runner 本地响应缓存、25 条成组恢复副本、成组 fsync。
-- **恢复派发的前提是 `api-server` 自身负载回到门禁以内（`load1 < cores × 0.70`）且 Mongo 连接增长稳定**，而不是"采集已经停了"。基线未恢复时不得派发。
+- **恢复派发的前提是 PSI、实时 blocked、内存、swap 活动全部回到门禁以内且 Mongo 连接增长稳定**，而不是"采集已经停了"。基线未恢复时不得派发。
 
 正常运行或等待中的状态不通知。不要打印 GitHub token、SSH 密钥、Mongo URI、原始响应或任何会话字段，不要上传数据到 GitHub artifact。

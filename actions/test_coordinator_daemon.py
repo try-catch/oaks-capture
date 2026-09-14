@@ -119,7 +119,8 @@ class DaemonTests(unittest.TestCase):
             {'op': 'claim', 'run': '100-1', 'worker': '1.1'},
         ])
         unhealthy = {'at': 1, 'load1': 99, 'cores': 8, 'availableBytes': 1024,
-                     'blocked': 99, 'healthy': False, 'reasons': ['load', 'memory', 'blocked']}
+                     'blocked': 99, 'pressure': {'cpuSome': 99}, 'healthy': False,
+                     'reasons': ['memory', 'blocked', 'cpu_pressure']}
         with patch.object(self.daemon, 'host_health', return_value=unhealthy), \
                 patch('coordinator_daemon.time.sleep', side_effect=lambda _seconds: setattr(self.daemon, 'stopping', True)):
             self.daemon.stopping = False
@@ -131,7 +132,7 @@ class DaemonTests(unittest.TestCase):
         }])[0]['result']
         self.assertTrue(result['stop'])
         self.assertTrue(result['halted'])
-        self.assertEqual(result['serverHalt']['reasons'], ['load', 'memory', 'blocked'])
+        self.assertEqual(result['serverHalt']['reasons'], ['memory', 'blocked', 'cpu_pressure'])
 
 
 if __name__ == '__main__':

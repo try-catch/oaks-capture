@@ -55,17 +55,30 @@ class Daemon:
             if line.startswith('procs_blocked '):
                 blocked = int(line.split()[1])
                 break
+        pressure = {}
+        for resource in ('cpu', 'io', 'memory'):
+            rows = Path('/proc/pressure/' + resource).read_text().splitlines()
+            for row in rows:
+                kind, *fields = row.split()
+                values = dict(field.split('=', 1) for field in fields)
+                pressure[resource + kind.title()] = float(values['avg10'])
         cores = os.cpu_count() or 1
         reasons = []
-        if load1 > max(4, cores * 0.7):
-            reasons.append('load')
         if memory.get('MemAvailable', 0) < MIN_AVAILABLE_BYTES:
             reasons.append('memory')
         if blocked > max(8, cores // 4):
             reasons.append('blocked')
+        # 数千个短暂 D 状态任务会让 load1 在恢复后虚高很久；它不能单独代表
+        # 当前资源争用。PSI 直接衡量任务实际等待 CPU/I/O/内存的时间。
+        if pressure.get('cpuSome', 0) >= 70:
+            reasons.append('cpu_pressure')
+        if pressure.get('ioFull', 0) >= 20:
+            reasons.append('io_pressure')
+        if pressure.get('memoryFull', 0) >= 10:
+            reasons.append('memory_pressure')
         return {'at': int(time.time() * 1000), 'load1': load1, 'cores': cores,
                 'availableBytes': memory.get('MemAvailable', 0), 'blocked': blocked,
-                'healthy': not reasons, 'reasons': reasons}
+                'pressure': pressure, 'healthy': not reasons, 'reasons': reasons}
 
     def health_loop(self):
         """连续两次异常才熔断当前轮；正常时只更新观测值，不限制吞吐。"""

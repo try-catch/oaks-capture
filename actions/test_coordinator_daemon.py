@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 import socket
 from pathlib import Path
 import tempfile
@@ -111,6 +112,26 @@ class DaemonTests(unittest.TestCase):
         self.socket_path.unlink()
         with self.assertRaises(ValueError):
             forward_to_daemon({'op': 'status'})
+
+    def test_two_unhealthy_samples_halt_new_permits(self):
+        request(self.socket_path, [
+            {'op': 'begin', 'run': '100-1', 'threads': 1, 'nodes': 1, 'maxClaims': 1},
+            {'op': 'claim', 'run': '100-1', 'worker': '1.1'},
+        ])
+        unhealthy = {'at': 1, 'load1': 99, 'cores': 8, 'availableBytes': 1024,
+                     'blocked': 99, 'healthy': False, 'reasons': ['load', 'memory', 'blocked']}
+        with patch.object(self.daemon, 'host_health', return_value=unhealthy), \
+                patch('coordinator_daemon.time.sleep', side_effect=lambda _seconds: setattr(self.daemon, 'stopping', True)):
+            self.daemon.stopping = False
+            self.daemon.unhealthy_samples = 1
+            self.daemon.health_loop()
+        self.daemon.stopping = False
+        result = request(self.socket_path, [{
+            'op': 'permit', 'run': '100-1', 'worker': '1.1', 'slug': 'one', 'key': 'a' * 64,
+        }])[0]['result']
+        self.assertTrue(result['stop'])
+        self.assertTrue(result['halted'])
+        self.assertEqual(result['serverHalt']['reasons'], ['load', 'memory', 'blocked'])
 
 
 if __name__ == '__main__':

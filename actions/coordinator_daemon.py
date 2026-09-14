@@ -24,6 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from coordinator import Store, read  # noqa: E402
 
 PERSIST_INTERVAL_MS = 1000
+HEALTH_INTERVAL_SECONDS = 5
+MIN_AVAILABLE_BYTES = 8 * 1024 ** 3
 DEFAULT_STATE = {'owner': None, 'until': 0, 'next': 0, 'rateCount': 0, 'permit': None}
 # 这些操作改的是跨节点共享状态，落盘一次代价很低且影响后续调度，立即持久化。
 URGENT_OPS = {'begin', 'end', 'claim', 'done'}
@@ -38,6 +40,52 @@ class Daemon:
         self.stopping = False
         self.started_at = time.time()
         self.requests = 0
+        self.unhealthy_samples = 0
+
+    @staticmethod
+    def host_health():
+        """读取 /proc 的常数级指标；不执行外部命令，也不进入采集热路径。"""
+        load1 = float(Path('/proc/loadavg').read_text().split()[0])
+        memory = {}
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            name, value = line.split(':', 1)
+            memory[name] = int(value.split()[0]) * 1024
+        blocked = 0
+        for line in Path('/proc/stat').read_text().splitlines():
+            if line.startswith('procs_blocked '):
+                blocked = int(line.split()[1])
+                break
+        cores = os.cpu_count() or 1
+        reasons = []
+        if load1 > max(4, cores * 0.7):
+            reasons.append('load')
+        if memory.get('MemAvailable', 0) < MIN_AVAILABLE_BYTES:
+            reasons.append('memory')
+        if blocked > max(8, cores // 4):
+            reasons.append('blocked')
+        return {'at': int(time.time() * 1000), 'load1': load1, 'cores': cores,
+                'availableBytes': memory.get('MemAvailable', 0), 'blocked': blocked,
+                'healthy': not reasons, 'reasons': reasons}
+
+    def health_loop(self):
+        """连续两次异常才熔断当前轮；正常时只更新观测值，不限制吞吐。"""
+        while not self.stopping:
+            try:
+                health = self.host_health()
+                with self.store.lock:
+                    self.store.memory['serverHealth'] = health
+                    self.unhealthy_samples = self.unhealthy_samples + 1 if not health['healthy'] else 0
+                    if self.store.memory.get('owner') and self.unhealthy_samples >= 2:
+                        self.store.memory['serverHalt'] = {
+                            'at': health['at'], 'reasons': health['reasons'],
+                            'load1': health['load1'], 'availableBytes': health['availableBytes'],
+                            'blocked': health['blocked'],
+                        }
+                        self.dirty.set()
+            except (OSError, ValueError, KeyError):
+                # 监控读取失败不误杀采集；下一周期重试。
+                pass
+            time.sleep(HEALTH_INTERVAL_SECONDS)
 
     def flush(self):
         with self.store.lock:
@@ -103,6 +151,7 @@ def serve(root, socket_path):
     server.listen(256)
 
     threading.Thread(target=daemon.persist_loop, daemon=True).start()
+    threading.Thread(target=daemon.health_loop, daemon=True).start()
 
     def stop(_signum, _frame):
         daemon.stopping = True

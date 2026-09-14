@@ -333,7 +333,7 @@ class Store:
         state.setdefault('topology', {'nodeMs': DEFAULT_NODE_SPACING_MS, 'throttleLimit': DEFAULT_THROTTLE_LIMIT,
                                       'maxInFlight': 1, 'maxClaims': 6})
         if op == 'status':
-            return {key: state.get(key) for key in ('owner', 'until', 'next', 'claims', 'deadline', 'halted', 'topology', 'metrics')} | {
+            return {key: state.get(key) for key in ('owner', 'until', 'next', 'claims', 'deadline', 'halted', 'topology', 'metrics', 'serverHealth', 'serverHalt')} | {
                 'permits': len(state['permits']), 'nodeUntil': state['nodeUntil'],
                 # 退避汇总用于确认控制面没有重新退化成满额空转轮询。
                 'claimBackoff': {'workers': len(state['claimWaits']),
@@ -375,7 +375,7 @@ class Store:
             metrics = {'startedAt': now, 'documentsWritten': 0, 'responses': 0, 'http429': 0, 'businessErrors': {}}
             state.update(owner=run, deadline=topology['deadline'], claims={}, games=games, waiters=[],
                          permits={}, nodeUntil={}, nodeThrottle={}, halted={}, rateNodes=[], topology=topology,
-                         metrics=metrics, claimWaits={})
+                         metrics=metrics, claimWaits={}, serverHalt=None)
             return {'deadline': state['deadline'], 'until': state['until'], 'games': len(games), 'topology': topology}
         if state['owner'] != run:
             raise ValueError('跨环境队列锁不属于当前运行')
@@ -388,6 +388,10 @@ class Store:
             # 该出口已被熔断：立刻停机并保留已落盘数据，由新节点接手续采。
             # 必须早于租约校验，否则被交回租约的线程只会看到普通错误。
             return {'stop': True, 'halted': True}
+        if op in ('claim', 'permit') and state.get('serverHalt'):
+            # 守护进程连续检测到宿主机过载后，不再发放新请求；已有响应仍可落盘，
+            # 因此可以保住速度正常时的吞吐，又能在雪崩前快速收口。
+            return {'stop': True, 'halted': True, 'serverHalt': state['serverHalt']}
         if op == 'claim':
             if now >= state['deadline'] or state['until'] >= state['deadline']:                return {'stop': True, 'until': state['until']}
             if now < state['until']:
@@ -578,7 +582,9 @@ class Store:
                     # 单节点内太多线程被限速：熔断该出口，保留数据并让新节点接续。
                     state['halted'][node] = now
                     self.release_node(state, node)
-            return {'until': state['until'], 'nodeUntil': state['nodeUntil'].get(node, 0), 'halted': node in state['halted']}
+            return {'until': state['until'], 'nodeUntil': state['nodeUntil'].get(node, 0),
+                    'halted': node in state['halted'] or bool(state.get('serverHalt')),
+                    'serverHalt': state.get('serverHalt')}
         raise ValueError('未知协调操作')
 
 

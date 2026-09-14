@@ -46,12 +46,17 @@ class Daemon:
 
     def persist_loop(self):
         while not self.stopping:
-            if self.dirty.wait(PERSIST_INTERVAL_MS / 1000):
-                try:
-                    self.flush()
-                except Exception:
-                    # 落盘失败不能中断服务；下一个周期继续尝试。
-                    pass
+            # Event 已置位时 wait() 会立即返回。旧实现因此在持续请求期间变成
+            # “每个请求都 fsync”，最终制造 I/O 风暴。固定周期采样 dirty，保证
+            # queue.json 最多每秒同步一次。
+            time.sleep(PERSIST_INTERVAL_MS / 1000)
+            if not self.dirty.is_set():
+                continue
+            try:
+                self.flush()
+            except Exception:
+                # 落盘失败不能中断服务；下一个周期继续尝试。
+                pass
 
     def handle(self, connection):
         stream = connection.makefile('rwb')
@@ -102,6 +107,8 @@ def serve(root, socket_path):
     def stop(_signum, _frame):
         daemon.stopping = True
         try:
+            with daemon.store.lock:
+                daemon.store.sync_all()
             daemon.flush()
         finally:
             server.close()

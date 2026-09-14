@@ -83,6 +83,24 @@ class DaemonTests(unittest.TestCase):
         persisted = json.loads((self.root / 'output/.actions/queue.json').read_text())
         self.assertEqual(persisted['owner'], '100-1')
 
+    def test_append_groups_fsync_and_done_flushes_remainder(self):
+        request(self.socket_path, [
+            {'op': 'begin', 'run': '100-1', 'threads': 1, 'nodes': 1, 'maxClaims': 1},
+            {'op': 'claim', 'run': '100-1', 'worker': '1'},
+        ])
+        payloads = []
+        for number in range(3):
+            document = {'game': 'one', 'sourceRoundHash': format(number, '064x'), 'data': [number]}
+            payloads.append({'op': 'append', 'run': '100-1', 'worker': '1', 'slug': 'one',
+                             'document': document, 'line': json.dumps(document)})
+        self.assertTrue(all(item['ok'] for item in request(self.socket_path, payloads)))
+        self.assertEqual(self.daemon.store.unsynced['one'], 3)
+        done = request(self.socket_path, [
+            {'op': 'done', 'run': '100-1', 'worker': '1', 'slug': 'one', 'status': 'incomplete', 'count': 3},
+        ])[0]
+        self.assertTrue(done['ok'])
+        self.assertNotIn('one', self.daemon.store.unsynced)
+
     def test_legacy_container_check_tolerates_missing_container(self):
         # 本机没有 docker / 容器不存在时不得让 begin 报 CalledProcessError。
         state = Store(self.root).load()

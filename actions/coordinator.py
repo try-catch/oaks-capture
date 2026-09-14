@@ -33,6 +33,10 @@ CLAIM_WAIT_BASE_MS = 1500
 CLAIM_WAIT_MAX_MS = 30_000
 # claimWaits 的条目上限：长跑时不因为节点标识累积而无限增长。
 CLAIM_WAITS_LIMIT = 200
+# 每个游戏累计若干条后再做一次同步写。Mongo 已经逐局 acknowledged，服务端
+# NDJSON 是恢复副本；按游戏分组提交可把 60 个活跃游戏的 fsync 从约 60 次/秒
+# 降到约 2.4 次/秒，同时在正常结束时补做最终同步。
+DATA_FSYNC_EVERY = 25
 # 线程身份为 <节点>.<线程>，节点身份用于出口熔断，线程身份用于游戏租约。
 THREAD_ID = re.compile(r'([0-9]+)\.([0-9]+)')
 # 旧采集容器检查的缓存时长：不必每个官方请求都跑一次 docker inspect。
@@ -195,6 +199,22 @@ class Store:
         # 常驻模式下请求日志只放内存：不再为每个请求写文件 + fsync。
         self.journals = {}
         self.hash_cache = {}
+        self.unsynced = {}
+
+    def sync_game(self, folder, slug):
+        """同步一个游戏的恢复副本；hashes.txt 可从 NDJSON 重建，无需重复 fsync。"""
+        if not self.unsynced.get(slug):
+            return
+        target = folder / (slug + '.ndjson')
+        if target.exists():
+            with target.open('rb') as stream:
+                os.fsync(stream.fileno())
+        self.unsynced.pop(slug, None)
+
+    def sync_all(self):
+        """守护进程退出前同步全部尚未成组提交的数据。"""
+        for slug in list(self.unsynced):
+            self.sync_game(self.root / 'output' / slug, slug)
 
     def load(self):
         return read(self.state_path, {'owner': None, 'until': 0, 'next': 0, 'rateCount': 0, 'permit': None})
@@ -436,10 +456,17 @@ class Store:
                     raise ValueError('NDJSON 行与文档不一致')
                 stream.write(line + '\n')
                 stream.flush()
-                os.fsync(stream.fileno())
+                # 单次调用没有常驻进程兜底，仍逐条保持原有耐久语义；正式采集走
+                # 守护进程，按游戏分组同步，避免数十路随机 fsync 压垮测试服。
+                if self.memory is None:
+                    os.fsync(stream.fileno())
             with (private / 'hashes.txt').open('a') as index:
                 index.write(doc['sourceRoundHash'] + '\n')
             known.add(doc['sourceRoundHash'])
+            if self.memory is not None:
+                self.unsynced[slug] = self.unsynced.get(slug, 0) + 1
+                if self.unsynced[slug] >= DATA_FSYNC_EVERY:
+                    self.sync_game(folder, slug)
             return {'written': True}
         if op == 'ack':
             committed = req['hash']
@@ -450,6 +477,8 @@ class Store:
             atomic(private / 'round.json', None)
             return {}
         if op == 'done':
+            # 一个游戏释放租约前必须提交最后不足一组的数据。
+            self.sync_game(folder, slug)
             state['claims'][slug]['status'] = req['status']
             state['claims'][slug]['count'] = req.get('count', 0)
             baseline = state['claims'][slug].get('baselineCount', 0)

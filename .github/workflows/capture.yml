@@ -1,5 +1,5 @@
 name: 3 OAKS durable capture
-run-name: 3 OAKS ${{ inputs.mode || 'capture' }} max=6 spacing=${{ inputs.mode == 'benchmark' && inputs.node_spacing_ms || '250' }}ms
+run-name: 3 OAKS ${{ inputs.mode || 'capture' }} max=60 spacing=${{ inputs.mode == 'benchmark' && inputs.node_spacing_ms || '250' }}ms
 
 on:
   workflow_dispatch:

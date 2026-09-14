@@ -91,8 +91,8 @@ class DaemonTests(unittest.TestCase):
         payloads = []
         for number in range(3):
             document = {'game': 'one', 'sourceRoundHash': format(number, '064x'), 'data': [number]}
-            payloads.append({'op': 'append', 'run': '100-1', 'worker': '1', 'slug': 'one',
-                             'document': document, 'line': json.dumps(document)})
+            payloads.append({'op': 'append_batch', 'run': '100-1', 'worker': '1', 'slug': 'one',
+                             'lines': [json.dumps(document)]})
         self.assertTrue(all(item['ok'] for item in request(self.socket_path, payloads)))
         self.assertEqual(self.daemon.store.unsynced['one'], 3)
         done = request(self.socket_path, [

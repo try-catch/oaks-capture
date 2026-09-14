@@ -64,7 +64,7 @@ test("可恢复的会话失效会丢弃未完成局并重新登录", () => {
 
 test("协调器只重放可用响应，业务失败的 200 必须重新请求", () => {
   assert.match(coordinator, /previous\.get\('usable'\) is True/);
-  assert.match(coordinator, /entry\['usable'\] = bool\(req\.get\('usable'/);
+  assert.match(coordinator, /entry\['usable'\] = usable/);
 });
 
 test("丢弃未完成局必须同时清掉请求日志键，否则重新登录会被缓存重放", () => {
@@ -97,9 +97,13 @@ test("协调走常驻长连接，异常时回退单次调用", () => {
   assert.match(worker, /协调器拒绝操作/);
 });
 
-test("worker 拒绝重放已缓存的业务失败响应并输出可诊断原因", () => {
-  assert.match(worker, /已缓存的官方响应为业务失败/);
-  assert.match(worker, /usable: usableResponse\(body\)/);
+test("worker 在 GitHub 本地缓存响应且只向测试服报告小型状态", () => {
+  assert.match(worker, /localResponses\.set/);
+  assert.match(worker, /rpc\('permit', \{ key \}\)/);
+  assert.doesNotMatch(worker, /body: body\.toString\('base64'\)/);
+  assert.doesNotMatch(worker, /rpc\('permit', \{ key, request \}\)/);
+  assert.match(worker, /usable = response\.ok && usableResponse\(body\)/);
+  assert.match(worker, /businessCode: 'FETCH_ERROR'/);
   assert.match(worker, /function reasonOf/);
   // 公开日志不得出现完整 URL（含队列令牌）或官方响应正文。
   assert.match(worker, /replace\(\/https\?:\\\/\\\/\\S\+\/g, '<url>'\)/);

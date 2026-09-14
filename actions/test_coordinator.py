@@ -79,6 +79,24 @@ class RecoveryTests(unittest.TestCase):
         self.call('done', status='incomplete', count=1)
         self.assertEqual(self.call('status')['metrics']['documentsWritten'], 1)
 
+    def test_runner_batches_documents_without_duplicate_payload(self):
+        documents = [
+            {'game': 'one', 'sourceRoundHash': format(number, '064x'), 'data': [number]}
+            for number in range(3)
+        ]
+        result = self.call('append_batch', lines=[json.dumps(document) for document in documents])
+        self.assertEqual(result, {'written': 3, 'duplicates': 0})
+        duplicate = self.call('append_batch', lines=[json.dumps(documents[0])])
+        self.assertEqual(duplicate, {'written': 0, 'duplicates': 1})
+        self.assertEqual(len((self.root / 'output/one/one.ndjson').read_text().splitlines()), 3)
+
+    def test_compact_runner_response_keeps_body_off_server(self):
+        self.call('permit', key=self.key)
+        self.call('response', key=self.key, status=200, usable=False, businessCode='SERVER_ERROR')
+        self.assertFalse((self.store.directory / 'one' / (self.key + '.json')).exists())
+        self.assertEqual(self.call('status')['metrics']['businessErrors'], {'SERVER_ERROR': 1})
+        self.assertNotIn('cached', self.call('permit', key='b' * 64))
+
     def test_response_replay_and_unknown_request_fail_closed(self):
         self.assertTrue(self.call('permit', key=self.key, request={'url': 'https://example.test'})['granted'])
         with self.assertRaises(ValueError):

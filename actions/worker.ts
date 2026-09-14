@@ -18,6 +18,8 @@ let requestKey: string | undefined;
 let deadline = 0;
 let stopping = false;
 let egress = process.env.OAKS_EGRESS ?? '';
+const documentBatch: string[] = [];
+const localResponses = new Map<string, { body: Buffer; status: number; headers: Record<string, string> }>();
 // 采集期会屏蔽 console.log 以免把工具日志带进公开 Actions 日志；
 // 但吞吐诊断行只含数字与节点标识，用原始引用绕过屏蔽输出。
 const realLog = console.log.bind(console);
@@ -37,13 +39,30 @@ const channel = new CoordinatorChannel({
 }, process.env.OAKS_PERSISTENT_CHANNEL !== '0');
 
 function rpc(op: string, data: Record<string, unknown> = {}): any {
-  const payload = JSON.stringify({ op, run, worker, node, slug, runner: { name: process.env.RUNNER_NAME, environment: process.env.RUNNER_ENVIRONMENT, egress }, ...data });
+  const runner = ['begin', 'claim'].includes(op)
+    ? { runner: { name: process.env.RUNNER_NAME, environment: process.env.RUNNER_ENVIRONMENT, egress } }
+    : {};
+  const payload = JSON.stringify({ op, run, worker, node, slug, ...runner, ...data });
   const response = channel.call(payload);
   if (!response?.ok) throw new Error(`协调器拒绝操作: ${response?.error ?? '未知响应'}`);
   return response.result;
 }
 
+function flushDocuments(): void {
+  if (!documentBatch.length) return;
+  const lines = documentBatch.splice(0);
+  const started = Date.now();
+  try {
+    rpc('append_batch', { lines });
+    timing.append += Date.now() - started;
+  } catch (error) {
+    documentBatch.unshift(...lines);
+    throw error;
+  }
+}
+
 function syncFiles(): void {
+  flushDocuments();
   const directory = path.join(root, 'output', slug);
   const files: Record<string, string> = {};
   for (const name of ['feature-inventory.json', 'start-template.json', 'coverage.json', 'mode-coverage.json', 'capture-checkpoint.json', 'validation-report.json', 'data-manifest.json', 'mongo-audit-test.json']) {
@@ -113,13 +132,18 @@ function installDurability(): void {
     savePending: value => { pending = value; },
     // 丢弃未完成局时必须一并清掉请求日志键：否则后续请求会复用同一键，
     // 被协调器用旧响应重放（重新登录也会命中缓存，拿到假会话）。
-    discardPending: () => { pending = undefined; requestKey = undefined; },
+    discardPending: () => {
+      if (requestKey) localResponses.delete(requestKey);
+      pending = undefined;
+      requestKey = undefined;
+    },
     requestStep: (id, step) => { requestKey = crypto.createHash('sha256').update(`${slug}:${id}:${step}`).digest('hex'); },
     writeDocument: document => {
-      const started = Date.now();
-      rpc('append', { document, line: JSON.stringify(document) });
-      timing.append += Date.now() - started;
+      // 完整局在 Runner 上完成 JSON 编码，测试服每 25 条只接收一个批次。
+      // 旧实现每条都传 document + line 两份完整内容并单独 fsync，是过载主因。
+      documentBatch.push(JSON.stringify(document));
       timing.documents += 1;
+      if (documentBatch.length >= 25) flushDocuments();
       if (timing.documents % 25 === 0) {
         const n = timing.documents;
         realLog(JSON.stringify({
@@ -131,7 +155,11 @@ function installDurability(): void {
         }));
       }
     },
-    acknowledge: () => { pending = undefined; requestKey = undefined; },
+    acknowledge: () => {
+      if (requestKey) localResponses.delete(requestKey);
+      pending = undefined;
+      requestKey = undefined;
+    },
     noteMongo: ms => { timing.mongo += ms; },
     syncFiles,
     shouldStop: stopped,
@@ -142,18 +170,14 @@ function installDurability(): void {
     const url = String(input);
     if (!/^https:\/\//.test(url)) throw new Error('只允许 HTTPS 官方请求');
     const key = requestKey ?? crypto.randomBytes(32).toString('hex');
-    const request = { url, method: options.method ?? 'GET', headers: Object.fromEntries(new Headers(options.headers)), body: options.body };
+    const locallyCached = localResponses.get(key);
+    if (locallyCached) return new Response(new Uint8Array(locallyCached.body), { status: locallyCached.status, headers: locallyCached.headers });
     while (true) {
       if (stopped()) throw new Error('ACTIONS_BUDGET');
       const permitStarted = Date.now();
-      const permit = rpc('permit', { key, request });
+      // URL、请求头和请求体只在 GitHub Runner 内处理；测试服只做小型令牌计数。
+      const permit = rpc('permit', { key });
       timing.permit += Date.now() - permitStarted;
-      if (permit.cached) {
-        const cached = Buffer.from(permit.cached.body, 'base64');
-        // 旧日志里可能缓存了业务失败的 200 响应；重放它会让这一局永久卡死。
-        if (!usableResponse(cached)) throw new Error(`已缓存的官方响应为业务失败: ${businessStatusCode(cached) ?? 'UNKNOWN'}`);
-        return new Response(cached, { status: permit.cached.status, headers: permit.cached.headers });
-      }
       if (permit.halted) throw new Error('ACTIONS_HALTED');
       if (permit.stop) throw new Error(permit.until > Date.now() ? 'ACTIONS_RATE_LIMIT' : 'ACTIONS_BUDGET');
       if (permit.granted) break;
@@ -162,12 +186,29 @@ function installDurability(): void {
     }
     // 不设置 HTTP/SOCKS 代理：真实 fetch 在 GitHub-hosted Runner 内执行。
     const fetchStarted = Date.now();
-    const response = await officialFetch(input, { ...options, signal: AbortSignal.timeout(20_000) });
+    let response: Response;
+    try {
+      response = await officialFetch(input, { ...options, signal: AbortSignal.timeout(20_000) });
+    } catch (error) {
+      // 网络失败也要归还小型许可，避免 60 个偶发超时把全局许可永久占满。
+      rpc('response', { key, status: 0, usable: false, businessCode: 'FETCH_ERROR' });
+      throw error;
+    }
     const body = Buffer.from(await response.arrayBuffer());
     timing.fetch += Date.now() - fetchStarted;
     const headers = Object.fromEntries(response.headers);
+    localResponses.set(key, { body, status: response.status, headers });
+    if (localResponses.size > 1000) localResponses.delete(localResponses.keys().next().value!);
     const respondStarted = Date.now();
-    const settled = rpc('response', { key, response: { status: response.status, headers, body: body.toString('base64') }, usable: usableResponse(body) });
+    const code = businessStatusCode(body);
+    const usable = response.ok && usableResponse(body);
+    const settled = rpc('response', {
+      key,
+      status: response.status,
+      retryAfter: headers['retry-after'] ?? '',
+      usable,
+      businessCode: code && code !== 'OK' ? code : undefined,
+    });
     timing.respond += Date.now() - respondStarted;
     if (settled.halted) throw new Error('ACTIONS_HALTED');
     if (response.status === 429) throw new Error('ACTIONS_RATE_LIMIT');

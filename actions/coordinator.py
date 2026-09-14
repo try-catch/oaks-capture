@@ -42,9 +42,9 @@ THREAD_ID = re.compile(r'([0-9]+)\.([0-9]+)')
 # 旧采集容器检查的缓存时长：不必每个官方请求都跑一次 docker inspect。
 LEGACY_CHECK_TTL_MS = 300_000
 # 这些操作不改队列状态，跳过状态回写。
-READ_ONLY_OPS = {'status', 'load', 'pending', 'files', 'append', 'ack'}
+READ_ONLY_OPS = {'status', 'load', 'pending', 'files', 'append', 'append_batch', 'ack'}
 # 这些操作由游戏租约保证单写，可以用各自游戏的锁而不是全局锁（status 除外，它要读一致状态）。
-GAME_LOCAL_OPS = {'load', 'pending', 'files', 'append', 'ack'}
+GAME_LOCAL_OPS = {'load', 'pending', 'files', 'append', 'append_batch', 'ack'}
 
 
 def node_of(worker):
@@ -441,33 +441,45 @@ class Store:
                     raise ValueError('拒绝写入非验收文件')
                 atomic(folder / name, json.loads(content))
             return {}
-        if op == 'append':
-            doc = req['document']
-            if doc.get('game') != slug or not re.fullmatch('[a-f0-9]{64}', doc.get('sourceRoundHash', '')):
-                raise ValueError('非法采集数据标识')
+        if op in ('append', 'append_batch'):
+            lines = req.get('lines') if op == 'append_batch' else [req.get('line', json.dumps(req['document'], ensure_ascii=False))]
+            if not isinstance(lines, list) or not 1 <= len(lines) <= DATA_FSYNC_EVERY:
+                raise ValueError('非法采集批次')
+            documents = []
+            for line in lines:
+                if not isinstance(line, str) or '\n' in line:
+                    raise ValueError('非法 NDJSON 行')
+                doc = json.loads(line)
+                if doc.get('game') != slug or not re.fullmatch('[a-f0-9]{64}', doc.get('sourceRoundHash', '')):
+                    raise ValueError('非法采集数据标识')
+                documents.append((doc, line))
             target = folder / (slug + '.ndjson')
             known = self.hashes(folder, private, slug)
-            # 游戏租约保证单写；再次提交同一局为幂等操作。
-            if doc['sourceRoundHash'] in known:
-                return {'duplicate': True}
+            batch_hashes = set()
+            fresh = []
+            for doc, line in documents:
+                value = doc['sourceRoundHash']
+                if value in known or value in batch_hashes:
+                    continue
+                batch_hashes.add(value)
+                fresh.append((doc, line))
+            if not fresh:
+                return {'duplicate': True} if op == 'append' else {'written': 0, 'duplicates': len(documents)}
             with target.open('a') as stream:
-                line = req.get('line', json.dumps(doc, ensure_ascii=False))
-                if '\n' in line or json.loads(line) != doc:
-                    raise ValueError('NDJSON 行与文档不一致')
-                stream.write(line + '\n')
+                stream.write(''.join(line + '\n' for _, line in fresh))
                 stream.flush()
                 # 单次调用没有常驻进程兜底，仍逐条保持原有耐久语义；正式采集走
                 # 守护进程，按游戏分组同步，避免数十路随机 fsync 压垮测试服。
                 if self.memory is None:
                     os.fsync(stream.fileno())
             with (private / 'hashes.txt').open('a') as index:
-                index.write(doc['sourceRoundHash'] + '\n')
-            known.add(doc['sourceRoundHash'])
+                index.write(''.join(doc['sourceRoundHash'] + '\n' for doc, _ in fresh))
+            known.update(doc['sourceRoundHash'] for doc, _ in fresh)
             if self.memory is not None:
-                self.unsynced[slug] = self.unsynced.get(slug, 0) + 1
+                self.unsynced[slug] = self.unsynced.get(slug, 0) + len(fresh)
                 if self.unsynced[slug] >= DATA_FSYNC_EVERY:
                     self.sync_game(folder, slug)
-            return {'written': True}
+            return {'written': len(fresh), 'duplicates': len(documents) - len(fresh)}
         if op == 'ack':
             committed = req['hash']
             if committed not in self.hashes(folder, private, slug):
@@ -488,7 +500,9 @@ class Store:
         if not re.fullmatch(r'[a-f0-9]{64}', key):
             raise ValueError('非法请求日志标识')
         if op == 'permit':
-            previous = self.journal_read(private, key)
+            # 新版 Runner 不再把 URL、请求头、请求体送到测试服。旧请求字段仅用于
+            # 平滑兼容已经启动的旧 job；下一轮开始后 journals 始终为空。
+            previous = self.journal_read(private, key) if req.get('request') is not None else None
             if previous:
                 # 只有调用方确认业务成功的响应才允许重放；官方会在 200 里返回业务失败，
                 # 重放它会让这一局永久卡死，因此旧版本没有 usable 标记的记录一律重新请求。
@@ -522,26 +536,33 @@ class Store:
             state['permits'][key] = {'key': key, 'slug': slug, 'worker': worker, 'node': node, 'at': now}
             waiters.remove(current)
             state['nodeUntil'][node] = max(state['nodeUntil'].get(node, 0), now + state['topology']['nodeMs'])
-            self.journal_write(private, key, {'request': req['request'], 'at': now, 'run': run, 'runner': req.get('runner', {})})
+            if req.get('request') is not None:
+                self.journal_write(private, key, {'request': req['request'], 'at': now, 'run': run, 'runner': req.get('runner', {})})
             return {'granted': True}
         if op == 'response':
             permit = state['permits'].get(key)
             if not permit or (permit.get('slug'), permit.get('worker')) != (slug, worker):
                 raise ValueError('响应不匹配当前请求锁')
             del state['permits'][key]
-            entry = self.journal_read(private, key) or {}
-            entry['response'] = req['response']
-            entry['usable'] = bool(req.get('usable', 200 <= req['response']['status'] < 300))
-            self.journal_write(private, key, entry)
+            compact = 'status' in req
+            response = req.get('response', {})
+            status = int(req.get('status', response.get('status', 0)))
+            usable = bool(req.get('usable', 200 <= status < 300))
+            if not compact:
+                entry = self.journal_read(private, key) or {}
+                entry['response'] = response
+                entry['usable'] = usable
+                self.journal_write(private, key, entry)
             metrics = state['metrics']
             metrics['responses'] += 1
-            if not entry['usable']:
-                code = business_error_code(req['response'])
+            if not usable:
+                code = str(req.get('businessCode') or business_error_code(response))
                 metrics['businessErrors'][code] = metrics['businessErrors'].get(code, 0) + 1
-            if req['response']['status'] == 429:
+            if status == 429:
                 state['rateCount'] += 1
                 metrics['http429'] += 1
-                wait = max(10_000, retry_after_ms(req['response'].get('headers'), now))
+                headers = {'retry-after': req.get('retryAfter', '')} if compact else response.get('headers')
+                wait = max(10_000, retry_after_ms(headers, now))
                 # 该出口立即退避并遵守 Retry-After。
                 state['nodeUntil'][node] = max(state['nodeUntil'].get(node, 0), now + wait)
                 threads = state['nodeThrottle'].setdefault(node, [])

@@ -4,13 +4,13 @@
 
 采集 workflow 位于 `actions/workflow.yml`，发布为 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。先用 `workflow_dispatch / check` 验证，通过后设置仓库变量 `CAPTURE_ENABLED=true`。正式采集由外部监督器在健康门禁通过后派发 `capture`：workflow 本身只有 `workflow_dispatch`，不使用 push、cron 或结束后的链式派发。使用 20 个 GitHub-hosted Linux 节点，每轮共享 45 分钟预算；单并发组最多保留一个运行和一个等待任务。
 
-`workflow_dispatch / benchmark` 用于确定官方稳定会话上限。它只调整单节点请求间隔（250/200ms）和本轮预算，每档最多运行 15 分钟并照常保存有效数据；必须逐档、单变量测试，并根据实际新增数据、业务错误、429 和熔断节点决定是否继续。**benchmark 不能提高并发**：`max_claims` 输入已移除，`OAKS_MAX_CLAIMS` 是 workflow 里的字面量 6，任何派发参数都无法放大它。测试期间设置 `BENCHMARK_ENABLED=true` 会阻止定时正式采集。
+`workflow_dispatch / benchmark` 用于确定官方稳定请求间隔。它只调整单节点请求间隔（250/200ms）和本轮预算，每档最多运行 15 分钟并照常保存有效数据；必须逐档、单变量测试，并根据实际新增数据、业务错误、429 和熔断节点决定是否继续。**benchmark 不能提高并发**：`max_claims` 输入已移除，`OAKS_MAX_CLAIMS` 是 workflow 里的字面量 60，任何派发参数都无法放大它。测试期间设置 `BENCHMARK_ENABLED=true` 会阻止定时正式采集。
 
-并发预算由协调器统一发放。**每节点实际 fork 的子进程数由 `activeThreads()` 收敛：`min(OAKS_THREADS, ceil(OAKS_MAX_CLAIMS / OAKS_NODES))`**，因此 20 节点 × 6 会话时每节点 1 个，全局共 20 个子进程与 20 条常驻 SSH 控制通道。`OAKS_THREADS: '8'` 只是与服务商书面授权一致的上限，不是每节点要起的进程数；旧版直接按它 fork 会在 20 节点上产生 160 条常驻通道，是必须避免的回归。**同时活跃的官方游戏会话数受 `OAKS_MAX_CLAIMS` 硬限制为 6**。实测把会话数开到 107 时，103 个游戏在第一次 `play` 就返回 `GAME_REOPENED`（176 次请求里 103 次失败），一轮只拿到 73 局；而 6 个会话时历史成功率为 97%（7643 次请求 7400 次 OK）。因此线程数不等于并发会话数，不要用提高线程数来提速。
+并发预算由协调器统一发放。**每节点实际 fork 的子进程数由 `activeThreads()` 收敛：`min(OAKS_THREADS, ceil(OAKS_MAX_CLAIMS / OAKS_NODES))`**，因此 20 节点 × 60 会话时每节点 3 个，全局共 60 个子进程与常驻 SSH 控制通道。`OAKS_THREADS: '8'` 只是与服务商书面授权一致的上限；旧版直接按它 fork 会在 20 节点上产生 160 条常驻通道，是必须避免的回归。**同时活跃的官方游戏会话数受 `OAKS_MAX_CLAIMS` 硬限制为 60**。历史成功运行在 45 分钟写入 68660 条且无 429/业务错误；实测 107 个会话时 103 个游戏在第一次 `play` 就返回 `GAME_REOPENED`，因此不得放大到 107 或线程总数 160。
 
 未拿到租约的节点在满额时按指数退避等待：`CLAIM_WAIT_BASE_MS` 1500 毫秒起、逐次翻倍、上限 `CLAIM_WAIT_MAX_MS` 30 秒，客户端原样遵守。稳定态下空闲节点几乎不再产生 claim 流量；固定 3 秒轮询会让 14 个空闲节点形成约 5 次/秒的空转 claim（各带一次 SSH 往返），属于控制面风暴，不得改回。`status` 返回的 `claimBackoff` 汇总了正在退避的 worker 数与最大尝试次数，可用于确认控制面没有退化。
 
-按 6 个活跃会话、每个会话 1 秒节奏计算，理论吞吐约 6 局/秒，1185 万局仍需要约 23 天连续运行，实际还受响应时间影响。想要更短的工期必须提高 `OAKS_MAX_CLAIMS`，而这需要先向服务商确认 demo 后端允许的并发会话数；在没有确认之前不要调高它。同屏线程数和节点数同样必须与服务商书面授权允许的并发一致。
+按历史成功轮次，60 个活跃会话、每个会话 1 秒节奏约写入 3 万条/20 分钟。吞吐继续下降时先检查官方响应时延、Mongo 写入和门禁指标，不得再用削减活跃会话数掩盖服务端负载问题。
 
 官方请求的节奏分两层：线程自身的 `OAKS_SPIN_DELAY_MS`（部署默认 1 秒，代码默认 2 秒）决定单个会话的请求间隔，节点层的 `OAKS_NODE_SPACING_MS`（默认 250 毫秒）保证同一出口不会在极短时间内连打。请求许可按到达顺序发放，正在退避的出口不会占用队首拖慢其它出口；队首只是在自己节点的间隔里时返回精确剩余毫秒，避免固定轮询压低整体节奏。
 

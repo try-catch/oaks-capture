@@ -46,12 +46,12 @@ test("不会自动派发下一轮形成排队积压", () => {
 });
 
 test("同时活跃的官方会话数受限，不能等于线程总数", () => {
-  // 实测 107 个并发会话 → 103 个游戏立刻 GAME_REOPENED；6 个会话时成功率 97%。
-  // 必须是字面量：6 是硬限制，任何派发参数（含 benchmark）都不能放大。
-  assert.match(workflow, /OAKS_MAX_CLAIMS:\s*'6'/);
+  // 实测 107 个并发会话 → 103 个游戏立刻 GAME_REOPENED；正式采集维持已验证的 60。
+  // 必须是字面量：任何派发参数（含 benchmark）都不能放大。
+  assert.match(workflow, /OAKS_MAX_CLAIMS:\s*'60'/);
   assert.doesNotMatch(workflow, /vars\.OAKS_STABLE_MAX_CLAIMS/);
   assert.match(workflow, /OAKS_DEADLINE_MINUTES:\s*\$\{\{ inputs\.mode == 'benchmark' && '15' \|\| '45' \}\}/);
-  assert.match(worker, /maxClaims: numberFromEnv\('OAKS_MAX_CLAIMS', 6\)/);
+  assert.match(worker, /maxClaims: numberFromEnv\('OAKS_MAX_CLAIMS', 60\)/);
   assert.doesNotMatch(worker, /maxClaims: threads \* nodes/);
 });
 

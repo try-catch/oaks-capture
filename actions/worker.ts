@@ -60,7 +60,7 @@ function numberFromEnv(name: string, fallback: number): number {
 }
 function activeThreads(): number {
   const nodes = numberFromEnv('OAKS_NODES', 1);
-  const maxClaims = numberFromEnv('OAKS_MAX_CLAIMS', 6);
+  const maxClaims = numberFromEnv('OAKS_MAX_CLAIMS', 60);
   return Math.min(numberFromEnv('OAKS_THREADS', 8), Math.ceil(maxClaims / nodes));
 }
 async function discoverEgress(): Promise<string> {
@@ -304,7 +304,7 @@ async function main(): Promise<void> {
       throttleLimit: Math.min(numberFromEnv('OAKS_THROTTLE_LIMIT', 4), Math.ceil(threads / 2)),
       maxInFlight: threads * nodes,
       // 同时活跃的官方游戏会话数必须限制：demo 后端在大量并发会话时返回 GAME_REOPENED。
-      maxClaims: numberFromEnv('OAKS_MAX_CLAIMS', 6),
+      maxClaims: numberFromEnv('OAKS_MAX_CLAIMS', 60),
         deadlineMinutes: numberFromEnv('OAKS_DEADLINE_MINUTES', 40),
       })));
     } finally { channel.close(); }

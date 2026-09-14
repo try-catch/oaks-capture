@@ -36,12 +36,10 @@ env:
   OAKS_THROTTLE_LIMIT: '4'
   OAKS_DEADLINE_MINUTES: ${{ inputs.mode == 'benchmark' && '15' || '45' }}
   OAKS_SPIN_DELAY_MS: '1000'
-  # 官方 demo 后端只容忍少量并发游戏会话：实测 107 个会话时 103 个游戏立刻
-  # 返回 GAME_REOPENED，而 6 个会话时成功率为 97%。这里限制的是同时活跃的
-  # 游戏会话数，不是线程数。
-  # 测试服发生过 Mongo 连接和写入过载，且基线长期过载：6 是硬限制，写成字面量，
-  # 任何派发参数（含 benchmark）都不能放大它。
-  OAKS_MAX_CLAIMS: '6'
+  # 恢复已验证的正式采集规模：20 个节点各 3 个 worker、全局 60 个活跃游戏。
+  # 107 个会话会触发大面积 GAME_REOPENED；60 写成字面量，任何派发参数
+  # （含 benchmark）都不能放大它。
+  OAKS_MAX_CLAIMS: '60'
   # 常驻长连接：单次协调往返从 1-2 秒降到毫秒级。1 启用，0 关闭。
   OAKS_PERSISTENT_CHANNEL: '1'
 

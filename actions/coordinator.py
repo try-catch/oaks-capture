@@ -26,8 +26,8 @@ GLOBAL_LIMIT_NODES = 2
 GLOBAL_LIMIT_WINDOW_MS = 120_000
 # 429 未给出 Retry-After 时的保守等待。
 CONSERVATIVE_WAIT_MS = 60_000
-# 满额 claim 的退避区间。20 节点 × 1 线程的拓扑下稳定只有 6 个节点持有游戏，
-# 其余节点若固定 3 秒轮询，会产生约 5 次/秒的空转 claim（各带一次 SSH 往返），
+# 满额 claim 的退避区间。60 个租约占满后，空闲 worker 若固定 3 秒轮询，
+# 仍会产生无效的空转 claim（各带一次 SSH 往返），
 # 在已经过载的测试服上叠加控制面风暴。指数退避把稳定态压到每次切换的少量探测。
 CLAIM_WAIT_BASE_MS = 1500
 CLAIM_WAIT_MAX_MS = 30_000
@@ -348,7 +348,7 @@ class Store:
                 'nodeMs': positive_int(req.get('nodeMs'), DEFAULT_NODE_SPACING_MS),
                 'throttleLimit': positive_int(req.get('throttleLimit'), DEFAULT_THROTTLE_LIMIT),
                 'maxInFlight': positive_int(req.get('maxInFlight'), threads * nodes),
-                # 未显式给出时保留历史上的 6 个并发游戏会话上限。
+                # 非 workflow 调用仍保留保守回退；正式 workflow 会显式传入 60。
                 'maxClaims': positive_int(req.get('maxClaims'), 6),
                 'deadline': now + positive_int(req.get('deadlineMinutes'), 40) * 60_000,
             }

@@ -6,8 +6,8 @@
 
 1. 官方请求只能由 GitHub-hosted Linux Runner 发出。不得在本机或测试服直接采集，不得使用代理、指定地区、轮换账号或主动轮换出口。
 2. 允许的动作只有：查询 GitHub Actions、仓库变量、测试服协调器/MongoDB 完成量；在门禁要求时单独补一个缺失索引；满足条件时派发一次现有 `capture.yml`；**以及在下文"运行期健康介入"判定失守时取消在途运行**。除这一项保护性取消外，不得取消、重跑或删除 GitHub 运行，不得修改代码。
-3. 仓库变量保持 `CAPTURE_ENABLED=true`、`BENCHMARK_ENABLED=false`。正式 workflow 固定最多 6 个活跃游戏/Mongo 写入者，这是硬限制：`OAKS_MAX_CLAIMS` 是字面量 `'6'`，不得被任何派发参数放大，不得改回 60，不得派发 benchmark。20 个 Runner 只是分散出口和接替故障节点，不能提高活跃会话数。单节点请求间隔 250ms。
-4. 每节点 worker 子进程数由 `activeThreads()` 收敛为 `min(OAKS_THREADS, ceil(maxClaims / nodes))`：20 节点 × 6 会话时每节点只 fork 1 个子进程（旧版固定 8 个，共 160 条常驻 SSH 控制通道）。不得绕过它直接使用授权线程数。`OAKS_THREADS: '8'` 是与服务商书面授权一致的上限，不是每节点实际进程数。
+3. 仓库变量保持 `CAPTURE_ENABLED=true`、`BENCHMARK_ENABLED=false`。正式 workflow 固定最多 60 个活跃游戏/Mongo 写入者：`OAKS_MAX_CLAIMS` 是字面量 `'60'`，不得被派发参数放大，不得派发 benchmark。单会话间隔 1000ms，单节点请求间隔 250ms。
+4. 每节点 worker 子进程数由 `activeThreads()` 收敛为 `min(OAKS_THREADS, ceil(maxClaims / nodes))`：20 节点 × 60 会话时每节点 fork 3 个子进程，共 60 条常驻 SSH 控制通道。不得绕过它直接使用授权线程数，避免回到旧版 20×8=160 条控制通道。
 5. 满额 claim 由协调器指数退避（`CLAIM_WAIT_BASE_MS` 1500ms 起，上限 `CLAIM_WAIT_MAX_MS` 30s），客户端原样遵守。不得改回固定 3 秒轮询：那会让未拿到租约的节点形成控制面风暴，在已过载的测试服上叠加约 5 次/秒的空转 claim 与 SSH 往返。
 6. `PLAYER_LOCKOUT` 且消息声明 jurisdiction/legal reasons 时属于地区法律限制。记录 Runner 和游戏并通知用户，不得通过更换或指定出口规避。
 7. HTTP 429 必须遵守 `Retry-After`。两个及以上节点同时限速时让协调器全局暂停；单节点达到熔断条件时保留数据、交回租约，不得绕过冷却。
@@ -54,7 +54,7 @@
 
 - 报告负载时必须区分**基线过载**与**采集增量**。判据是采集停止后 `load1` 是否回落、以及 `nr_running` 是否与之匹配，而不是负载绝对值。实测采集完全停止后 `load1` 仍可达 90–114，而同一时刻 `nr_running` 只有 1–5，说明这类高负载来自 `api-server` 的突发连接风暴，不是采集。
 - 不得把全部 load 归因于采集，也不得因为基线高就放大采集并发。
-- 采集侧已消除的增量，若退化即为必须修复的回归：每节点 1 个子进程（旧版 160）、满额指数退避（旧版约 50 次/秒空转 claim）、Mongo 连接池 `maxPoolSize=1`。
+- 采集侧已消除的增量，若退化即为必须修复的回归：每节点只按预算启动 3 个子进程（总计 60，旧版 160）、满额指数退避（旧版约 50 次/秒空转 claim）、Mongo 连接池 `maxPoolSize=1`。
 - **恢复派发的前提是 `api-server` 自身负载回到门禁以内（`load1 < cores × 0.70`）且 Mongo 连接增长稳定**，而不是"采集已经停了"。基线未恢复时不得派发。
 
 正常运行或等待中的状态不通知。不要打印 GitHub token、SSH 密钥、Mongo URI、原始响应或任何会话字段，不要上传数据到 GitHub artifact。

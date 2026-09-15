@@ -9,7 +9,7 @@
 3. 公开仓库 `main` 必须至少包含 `021f3b7`。在人工压测完成前保持 `CAPTURE_ENABLED=false`；收到恢复指令后才设为 `true`，同时保持 `BENCHMARK_ENABLED=false`。正式 workflow 固定最多 60 个活跃游戏/Mongo 写入者：`OAKS_MAX_CLAIMS` 是字面量 `'60'`，不得被派发参数放大，不得派发 benchmark。单会话间隔 1000ms，单节点请求间隔 250ms。
 4. 每节点 worker 子进程数由 `activeThreads()` 收敛为 `min(OAKS_THREADS, ceil(maxClaims / nodes))`：20 节点 × 60 会话时每节点 fork 3 个子进程，共 60 条常驻 SSH 控制通道。不得绕过它直接使用授权线程数，避免回到旧版 20×8=160 条控制通道。
 5. 满额 claim 由协调器指数退避（`CLAIM_WAIT_BASE_MS` 1500ms 起，上限 `CLAIM_WAIT_MAX_MS` 30s），客户端原样遵守。不得改回固定 3 秒轮询：那会让未拿到租约的节点形成控制面风暴，在已过载的测试服上叠加约 5 次/秒的空转 claim 与 SSH 往返。
-6. `PLAYER_LOCKOUT` 且消息声明 jurisdiction/legal reasons 时属于地区法律限制。记录 Runner 和游戏并通知用户，不得通过更换或指定出口规避。
+6. `PLAYER_LOCKOUT` 且消息声明 jurisdiction/legal reasons 时属于该 GitHub Runner 的地区限制。记录 Runner 和游戏并停止该节点，其他节点继续；后续轮次仍可接受 GitHub 正常随机分配的新 Runner，但不得使用代理、指定地区、轮换账号或主动轮换出口。单轮受影响节点少于 10/20 时不构成全局停采条件，达到或超过一半才停止整轮并通知用户。
 7. HTTP 429 必须遵守 `Retry-After`。两个及以上节点同时限速时让协调器全局暂停；单节点达到熔断条件时保留数据、交回租约，不得绕过冷却。
 8. 响应正文、请求参数、局解析、哈希计算和待提交批次必须留在 GitHub Runner。测试服协调器只接收小型 permit/response 状态及每 25 条一个 `append_batch` 恢复副本；Mongo 实时写入也必须由 Runner 每 25 局聚合成一次 unordered `bulkWrite`，禁止恢复逐局 `updateOne`。不得恢复逐请求正文上传、双份 document/line 上传、20,000 条正文缓存或逐条 fsync。
 9. 采集期间不得启动测试服 `/app/server/slots/oaks-nx` 下的 107 个游戏服务。它们不是采集依赖，实测只恢复前 40 个目录就使 `api-server` 从约 31 GiB 增至 38.3 GiB，并把可用内存从约 22 GiB 降至 15 GiB。
@@ -50,9 +50,9 @@
 
    `gh workflow run capture.yml -R try-catch/oaks-capture -f mode=capture`
 
-7. 单个游戏的校验失败、HTTP 5xx 或结果未知请求不能拖停其它游戏。保持该请求隔离并报告游戏；只要本轮有有效新增、HTTP 429 和熔断均为 0、没有地区限制，且失败游戏不超过本轮租约的 10%，可以继续派发。相同游戏连续两轮失败时明确通知用户，但其它游戏继续采集。
+7. 单个游戏的校验失败、HTTP 5xx、结果未知请求或少数 Runner 的地区限制不能拖停其它游戏。保持该请求或节点隔离并报告；只要本轮有有效新增、HTTP 429 和熔断均为 0、受地区限制节点少于 10/20，且失败游戏不超过本轮租约的 10%，可以继续派发。相同游戏连续两轮失败时明确通知用户，但其它游戏继续采集。
 8. 基础设施失败后停止派发。后续周期做轻量 SSH、协调器、Mongo 和主机负载检查；间隔至少 30 秒的两次完整检查均恢复后允许自动派发，不需要用户再次确认。`owner=null` 时遗留的旧 `serverHalt` 按上一段处理，不能单独阻止恢复。
-9. 出现 Mongo `COLLSCAN` upsert、连接增长率超标、主机门禁失败、HTTP 429、当前在途运行新触发熔断、地区限制、超过 10% 游戏失败、没有有效新增或吞吐显著下降，立即停止后续派发并通知用户具体运行和指标。
+9. 出现 Mongo `COLLSCAN` upsert、连接增长率超标、主机门禁失败、HTTP 429、当前在途运行新触发熔断、受地区限制节点达到 10/20、超过 10% 游戏失败、没有有效新增或吞吐显著下降，立即停止后续派发并通知用户具体运行和指标。
 10. 全部配额达标后不再派发；确认 `validate-data.ts`、测试服 Mongo 审计和 `finalize-data.ts --target test` 通过，再通知完成。
 
 ## 归因纪律

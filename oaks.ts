@@ -12,7 +12,7 @@ import { CaptureThrottle } from "./src/capture-throttle";
 import { numberOption, selectGames, stringOption } from "./src/cli";
 import { classifyRound, discoverFeatureInventory, FeatureInventory, includeObservedFeatures } from "./src/features";
 import { discoverGame } from "./src/game-definition";
-import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, syncMongoRounds, upsertMongoRound } from "./src/mongo-store";
+import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, syncMongoRounds, upsertMongoRound, upsertMongoRounds } from "./src/mongo-store";
 import { actionFeatureKey, actionSpinType, command, JSONMap, nextAction, openSession, protocolAction, ProtocolHttpError, ProtocolStatusError, roundSpinType, Session } from "./src/protocol";
 import { buildPlayableActions, discoverShop, PlayAction, ShopInventory } from "./src/shop";
 import { validateGameRound } from "./src/validators";
@@ -260,6 +260,19 @@ export async function captureGame(
   }
   let mongo: MongoClient | undefined;
   let collection: any;
+  const mongoBatch: Record<string, unknown>[] = [];
+  const flushMongoBatch = async (): Promise<void> => {
+    if (!collection || !mongoBatch.length) return;
+    const batch = mongoBatch.splice(0);
+    const started = Date.now();
+    try {
+      await upsertMongoRounds(collection, batch, 25);
+      captureRuntime?.noteMongo?.(Date.now() - started);
+    } catch (error) {
+      mongoBatch.unshift(...batch);
+      throw error;
+    }
+  };
   const database = process.env.OAKS_MONGO_DB ?? game.dbName;
   try {
     mongo = new MongoClient(MONGO_URI, { serverSelectionTimeoutMS: 2500, maxPoolSize: 1, minPoolSize: 0, maxIdleTimeMS: 30_000 });
@@ -355,9 +368,16 @@ export async function captureGame(
       if (!hashes.has(document.sourceRoundHash)) {
         captureRuntime?.writeDocument(document);
         await fs.appendFile(ndjson, `${JSON.stringify(document)}\n`);
-        const mongoStarted = Date.now();
-        if (collection) await upsertMongoRound(collection, document);
-        captureRuntime?.noteMongo?.(Date.now() - mongoStarted);
+        if (collection && captureRuntime) {
+          // GitHub Runner 先聚合写入，再通过一条 bulkWrite 落到测试服 Mongo。
+          // 官方请求并发不变，同时把服务端每局一次写命令压缩为每 25 局一次。
+          mongoBatch.push(document);
+          if (mongoBatch.length >= 25) await flushMongoBatch();
+        } else if (collection) {
+          const mongoStarted = Date.now();
+          await upsertMongoRound(collection, document);
+          captureRuntime?.noteMongo?.(Date.now() - mongoStarted);
+        }
         hashes.add(document.sourceRoundHash);
         lastCompletedHash = document.sourceRoundHash;
         for (const feature of features) {
@@ -445,7 +465,8 @@ export async function captureGame(
   if (!complete) throw new Error(`${game.slug} 达到本轮上限 ${maxNewRounds}，采集目标尚未完成`);
   console.log(`3 OAKS ${game.slug} 采集完成：${captured} 局，${modeQuota ? "模式数量达标" : `全部分支 >= ${targetPerFeature}`}`);
   } finally {
-    await mongo?.close().catch(() => undefined);
+    try { await flushMongoBatch(); }
+    finally { await mongo?.close().catch(() => undefined); }
   }
 }
 

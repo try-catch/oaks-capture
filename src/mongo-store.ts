@@ -55,6 +55,23 @@ export async function upsertMongoRound(collection: MongoCollectionLike, document
   await collection.updateOne({ sourceRoundHash: { $eq: hash, $type: "string" } }, { $setOnInsert: { ...document, sourceRoundHash: hash } }, { upsert: true });
 }
 
+export async function upsertMongoRounds(collection: MongoCollectionLike, documents: Record<string, unknown>[], batchSize = 500): Promise<number> {
+  const unique = [...new Map(documents.map(document => {
+    const hash = String(document.sourceRoundHash ?? sourceRoundHash(document as { gameId?: number; game?: string; data: unknown }));
+    return [hash, { ...document, sourceRoundHash: hash }];
+  })).values()];
+  if (!collection.bulkWrite) {
+    for (const document of unique) await upsertMongoRound(collection, document);
+    return unique.length;
+  }
+  for (let offset = 0; offset < unique.length; offset += batchSize) {
+    await collection.bulkWrite(unique.slice(offset, offset + batchSize).map(document => ({
+      updateOne: { filter: { sourceRoundHash: { $eq: document.sourceRoundHash, $type: "string" } }, update: { $setOnInsert: document }, upsert: true },
+    })), { ordered: false });
+  }
+  return unique.length;
+}
+
 export async function syncMongoRounds(collection: MongoCollectionLike, documents: Record<string, unknown>[], batchSize = 500): Promise<number> {
   const unique = [...new Map(documents.map(document => {
     const hash = String(document.sourceRoundHash ?? sourceRoundHash(document as { gameId?: number; game?: string; data: unknown }));
@@ -65,18 +82,5 @@ export async function syncMongoRounds(collection: MongoCollectionLike, documents
     if (unique.length) await upsertMongoRound(collection, unique[unique.length - 1]);
     return 0;
   }
-  if (!collection.bulkWrite) {
-    for (const document of unique) await upsertMongoRound(collection, document);
-    return unique.length;
-  }
-  for (let offset = 0; offset < unique.length; offset += batchSize) {
-    await collection.bulkWrite(unique.slice(offset, offset + batchSize).map(document => ({
-      updateOne: {
-        filter: { sourceRoundHash: { $eq: document.sourceRoundHash, $type: "string" } },
-        update: { $setOnInsert: document },
-        upsert: true,
-      },
-    })), { ordered: false });
-  }
-  return unique.length;
+  return upsertMongoRounds(collection, unique, batchSize);
 }

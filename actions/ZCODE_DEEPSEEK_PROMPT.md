@@ -11,7 +11,7 @@
 5. 满额 claim 由协调器指数退避（`CLAIM_WAIT_BASE_MS` 1500ms 起，上限 `CLAIM_WAIT_MAX_MS` 30s），客户端原样遵守。不得改回固定 3 秒轮询：那会让未拿到租约的节点形成控制面风暴，在已过载的测试服上叠加约 5 次/秒的空转 claim 与 SSH 往返。
 6. `PLAYER_LOCKOUT` 且消息声明 jurisdiction/legal reasons 时属于地区法律限制。记录 Runner 和游戏并通知用户，不得通过更换或指定出口规避。
 7. HTTP 429 必须遵守 `Retry-After`。两个及以上节点同时限速时让协调器全局暂停；单节点达到熔断条件时保留数据、交回租约，不得绕过冷却。
-8. 响应正文、请求参数、局解析、哈希计算和待提交批次必须留在 GitHub Runner。测试服协调器只接收小型 permit/response 状态及每 25 条一个 `append_batch` 恢复副本；不得恢复逐请求正文上传、双份 document/line 上传、20,000 条正文缓存或逐条 fsync。
+8. 响应正文、请求参数、局解析、哈希计算和待提交批次必须留在 GitHub Runner。测试服协调器只接收小型 permit/response 状态及每 25 条一个 `append_batch` 恢复副本；Mongo 实时写入也必须由 Runner 每 25 局聚合成一次 unordered `bulkWrite`，禁止恢复逐局 `updateOne`。不得恢复逐请求正文上传、双份 document/line 上传、20,000 条正文缓存或逐条 fsync。
 9. 采集期间不得启动测试服 `/app/server/slots/oaks-nx` 下的 107 个游戏服务。它们不是采集依赖，实测只恢复前 40 个目录就使 `api-server` 从约 31 GiB 增至 38.3 GiB，并把可用内存从约 22 GiB 降至 15 GiB。
 
 ## 健康门禁阈值
@@ -28,7 +28,7 @@
 | Mongo 新建连接 | 间隔 30 秒两次 `serverStatus().connections.totalCreated`，增长 ≤ 2 条/秒 | 同上 |
 | 协调器 owner | 为空，或正属于当前在途运行 | 同上 |
 
-协调器自身每 5 秒读取一次 `/proc`，连续两次失守会设置 `serverHalt` 并停止发放新 permit。每轮还必须读取 `serverHealth`/`serverHalt`；一旦 `serverHalt` 非空，即使外部检查暂时恢复也不得继续派发，先让当前轮结束并报告。
+协调器自身每 5 秒读取一次 `/proc`，连续两次失守会设置 `serverHalt` 并停止发放新 permit。每轮还必须读取 `serverHealth`/`serverHalt`。在途运行期间出现 `serverHalt` 时，先让当前轮停止并报告。运行结束且 `owner=null` 后，`serverHalt` 只是上一轮的历史熔断记录；如果间隔 30 秒的两次完整健康检查均通过、Mongo 连接增长稳定且没有在途运行，允许直接派发下一轮，`begin` 会原子清除旧标记。不得因为这个历史标记形成永久停摆，也不得要求用户手工确认或手工修改协调器状态。
 
 历史上已占用大量 swap、或每秒几十 KiB 的自然换入本身不是故障，不得据此永久停跑。判据是**实时交换活动**，不是 swap 占用量。
 同理，短时 D 状态任务会使 `load1` 在恢复后虚高很久。`load1` 只作观测，不得单独停采集；以 PSI、实时 blocked、内存和 swap 活动为准。
@@ -51,8 +51,8 @@
    `gh workflow run capture.yml -R try-catch/oaks-capture -f mode=capture`
 
 7. 单个游戏的校验失败、HTTP 5xx 或结果未知请求不能拖停其它游戏。保持该请求隔离并报告游戏；只要本轮有有效新增、HTTP 429 和熔断均为 0、没有地区限制，且失败游戏不超过本轮租约的 10%，可以继续派发。相同游戏连续两轮失败时明确通知用户，但其它游戏继续采集。
-8. 基础设施失败后停止派发。后续周期只做一次轻量 SSH、协调器、Mongo 和主机负载检查，连续两次恢复后才允许再派发，避免用空运行持续冲击测试服。
-9. 出现 Mongo `COLLSCAN` upsert、连接增长率超标、主机门禁失败、HTTP 429、熔断、地区限制、超过 10% 游戏失败、没有有效新增或吞吐显著下降，立即停止后续派发并通知用户具体运行和指标。
+8. 基础设施失败后停止派发。后续周期做轻量 SSH、协调器、Mongo 和主机负载检查；间隔至少 30 秒的两次完整检查均恢复后允许自动派发，不需要用户再次确认。`owner=null` 时遗留的旧 `serverHalt` 按上一段处理，不能单独阻止恢复。
+9. 出现 Mongo `COLLSCAN` upsert、连接增长率超标、主机门禁失败、HTTP 429、当前在途运行新触发熔断、地区限制、超过 10% 游戏失败、没有有效新增或吞吐显著下降，立即停止后续派发并通知用户具体运行和指标。
 10. 全部配额达标后不再派发；确认 `validate-data.ts`、测试服 Mongo 审计和 `finalize-data.ts --target test` 通过，再通知完成。
 
 ## 归因纪律

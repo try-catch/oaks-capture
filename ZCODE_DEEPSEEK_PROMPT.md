@@ -4,6 +4,8 @@
 
 ## 固定边界
 
+已核实的测试服采集根目录为 `/api/api_new/tools/capture-oaks`，协调器客户端为该目录的 `actions/coordinator-client.py`，配置为 `capture.env`，Mongo 容器为 `mongodb`。优先向客户端发送只读 `{"op":"status"}` 获取当前内存状态；不要每轮重新 find 全盘，也不要把落盘 queue.json 当成实时状态。Mongo URI 只在远端进程内部从 capture.env 读取，不回传或打印。
+
 1. 官方请求只能由 GitHub-hosted Linux Runner 发出。不得在本机或测试服直接采集，不得使用代理、指定地区、轮换账号或主动轮换出口。
 2. 允许的动作只有：查询 GitHub Actions、仓库变量、测试服协调器/MongoDB 完成量；在门禁要求时单独补一个缺失索引；满足条件时派发一次现有 `capture.yml`；**以及在下文"运行期健康介入"判定失守时取消在途运行**。除这一项保护性取消外，不得取消、重跑或删除 GitHub 运行，不得修改代码。
 3. 公开仓库 `main` 必须至少包含 `021f3b7`。在人工压测完成前保持 `CAPTURE_ENABLED=false`；收到恢复指令后才设为 `true`，同时保持 `BENCHMARK_ENABLED=false`。正式 workflow 固定最多 60 个活跃游戏/Mongo 写入者：`OAKS_MAX_CLAIMS` 是字面量 `'60'`，不得被派发参数放大，不得派发 benchmark。单会话间隔 1000ms，单节点请求间隔 250ms。

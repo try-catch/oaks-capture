@@ -39,6 +39,7 @@
 
 ### 2026-09-17 派发判定修正（优先于历史轮次结论）
 
+- 健康检查直接复用本地已验证脚本，不再临场摸索协议/凭据/目录：`ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -i /Users/xx/work/backup/misc/服务器/api_server_20260731.pem ubuntu@52.87.94.113 'sudo python3 -' < /Users/xx/work/api/api/api.numeric/capture/capture-oaks/actions/supervisor-health.py`。相隔至少 30 秒执行两次，按输出 at 和 mongo.totalCreated 的差计算连接速率；两次 hostHealthy=true、107 库、missing=[]、协调器与限流门禁均通过才可派发。脚本只读元数据，不发官方请求；失败时禁止派发，不放宽 SSH 校验。
 - 单轮监督目标 3 分钟、最长 5 分钟；完成两次健康采样后只做必要判断并退出，不留后台扫描任务。若预算内不能安全完成门禁，不派发，报告具体阻塞后结束本轮，不能跳过门禁或不断重复调查同一历史失败。
 - 采集期间禁止全量读取、wc -l 或扫描 NDJSON、hashes.txt；进度使用 Mongo estimatedDocumentCount、协调器统计和文件元数据。禁止用长时间全盘扫描制造 I/O 压力后再误判采集过载。
 - 所有 SSH 必须使用 StrictHostKeyChecking=yes 和既有可信 known_hosts；禁止 no、accept-new、清空 known_hosts 或绕过主机指纹验证。校验失败时停止并报告，不自动放宽。

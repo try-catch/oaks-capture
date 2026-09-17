@@ -90,6 +90,26 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(duplicate, {'written': 0, 'duplicates': 1})
         self.assertEqual(len((self.root / 'output/one/one.ndjson').read_text().splitlines()), 3)
 
+    def test_bounded_restore_keeps_large_ndjson_out_of_metadata(self):
+        folder = self.root / 'output/one'
+        folder.mkdir(exist_ok=True)
+        body = ('中文恢复\n' * 100000).encode()
+        (folder / 'one.ndjson').write_bytes(body)
+        metadata = self.call('load', chunked=True)
+        self.assertNotIn('one.ndjson', metadata['files'])
+        self.assertEqual(metadata['dataBytes'], len(body))
+        recovered = bytearray()
+        while len(recovered) < len(body):
+            part = self.call('load_chunk', offset=len(recovered), size=512 * 1024)
+            self.assertEqual(part['offset'], len(recovered))
+            recovered.extend(base64.b64decode(part['data']))
+        self.assertEqual(recovered, body)
+        for offset, size in [(-1, 1), (0, 524289), (0, 0), (True, 1)]:
+            with self.assertRaises(ValueError):
+                self.call('load_chunk', offset=offset, size=size)
+        with self.assertRaises(ValueError):
+            self.store.call(dict(op='load_chunk', run='100-1', worker='2', slug='one', offset=0, size=1), check_legacy=False)
+
     def test_compact_runner_response_keeps_body_off_server(self):
         self.call('permit', key=self.key)
         self.call('response', key=self.key, status=200, usable=False, businessCode='SERVER_ERROR')

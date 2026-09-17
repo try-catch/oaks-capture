@@ -35,6 +35,15 @@
 
 ## 每次执行（每 20 分钟）
 
+### 2026-09-17 派发判定修正（优先于历史轮次结论）
+
+- 时间线必须以 GitHub API 最近至少 30 条 capture.yml 运行的 created_at/updated_at 为依据，统一换算 Asia/Hong_Kong。queue.json 的写入时间、单轮统计、聊天中的上次快照都不能证明中间没有运行。08:35 结束、08:40 派发属于正常衔接，不能据此宣布停摆。
+- 无论是否有在途运行，健康检查始终保留；不要反复下载全量 job 日志或扫描数 GB NDJSON。只有有新故障签名时才提取少量相关日志。GitHub conclusion=failure 不等于所有游戏失败；预算结束后的 job 非零退出、仍标 running 的历史 claim 均不能单独算成失败游戏，也不能据此无限期冻结派发。早期退出/RESTORE_FAILED 必须单独计入真实恢复失败。
+- 曾经的整包恢复问题已改为 load(chunked=true) 元数据 + 每次最多 512 KiB 的 load_chunk，准备失败会明确回写 failed/paused。不得在新版本之后继续引用旧 run 35136745203 的同一失败永久阻止派发。先核实公开 worker、测试服协调器支持分块，再以修复后的最近完成轮评价是否复发。
+- 无在途运行、owner 为空、未到配额，且相隔至少 30 秒的两次完整门禁通过、当前限流截止时间已过、唯一索引全部存在时：若上一轮为已恢复的基础设施故障或已部署修复的旧故障，必须按第 8 条自动派发一次恢复验证轮，不要再次要求用户确认。若新版本仍复现同一系统性失败则停止并通知具体新 run 和失败阶段；禁止没有新证据地把旧故障重复解释成新故障。
+- 保持原有 20 分钟周期、20 节点/60 会话和全部限流/资源门禁。不能为了消除空档跳过健康检查、清空冷却、重跑受地区限制的节点或创建另一套定时器。
+- GitHub CLI 若未登录，不要直接认定 GitHub 不可用。使用已授权的 macOS 钥匙串 github.com / try-catch internet password，仅注入该次 gh 子进程的 GH_TOKEN；先核实 /user 的 login 为 try-catch。不得输出密码、落盘或运行带 shell trace 的命令。旧 gh:github.com 项返回 401 时不要无限重试它。
+
 1. **健康检查先做，且与是否有在途运行无关。** 一次轻量只读检查：CPU 核数、1 分钟负载、CPU/I/O/内存 PSI、可用内存、`vmstat 1 5`、协调器状态（owner/claims/`claimBackoff`/`serverHealth`/`serverHalt`）；并间隔 30 秒读取两次 Mongo `serverStatus().connections.totalCreated` 计算增长率。必须先完成这一条再看运行状态，禁止"发现有在途运行就整轮跳过监控"。
 2. **运行期健康介入：门禁失守时**（上表任一指标不满足），立即按顺序执行：
    1. 取消在途 capture 运行；

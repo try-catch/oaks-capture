@@ -42,9 +42,10 @@ THREAD_ID = re.compile(r'([0-9]+)\.([0-9]+)')
 # 旧采集容器检查的缓存时长：不必每个官方请求都跑一次 docker inspect。
 LEGACY_CHECK_TTL_MS = 300_000
 # 这些操作不改队列状态，跳过状态回写。
-READ_ONLY_OPS = {'status', 'load', 'pending', 'files', 'append', 'append_batch', 'ack'}
+READ_ONLY_OPS = {'status', 'load', 'load_chunk', 'pending', 'files', 'append', 'append_batch', 'ack'}
 # 这些操作由游戏租约保证单写，可以用各自游戏的锁而不是全局锁（status 除外，它要读一致状态）。
-GAME_LOCAL_OPS = {'load', 'pending', 'files', 'append', 'append_batch', 'ack'}
+GAME_LOCAL_OPS = {'load', 'load_chunk', 'pending', 'files', 'append', 'append_batch', 'ack'}
+RESTORE_CHUNK_BYTES = 512 * 1024
 
 
 def node_of(worker):
@@ -335,6 +336,7 @@ class Store:
         if op == 'status':
             return {key: state.get(key) for key in ('owner', 'until', 'next', 'claims', 'deadline', 'halted', 'topology', 'metrics', 'serverHealth', 'serverHalt')} | {
                 'permits': len(state['permits']), 'nodeUntil': state['nodeUntil'],
+                'restoreChunkBytes': RESTORE_CHUNK_BYTES,
                 # 退避汇总用于确认控制面没有重新退化成满额空转轮询。
                 'claimBackoff': {'workers': len(state['claimWaits']),
                                  'maxTries': max(state['claimWaits'].values(), default=0)}}
@@ -433,7 +435,23 @@ class Store:
         private.mkdir(parents=True, exist_ok=True, mode=0o700)
         if op == 'load':
             names = [slug + '.ndjson', 'feature-inventory.json', 'coverage.json', 'mode-coverage.json', 'capture-checkpoint.json']
-            return {'files': {name: (folder / name).read_text() for name in names if (folder / name).exists()}, 'pending': read(private / 'round.json')}
+            if req.get('chunked') is True:
+                names.remove(slug + '.ndjson')
+            target = folder / (slug + '.ndjson')
+            return {'files': {name: (folder / name).read_text() for name in names if (folder / name).exists()},
+                    'dataBytes': target.stat().st_size if target.exists() else 0,
+                    'pending': read(private / 'round.json')}
+        if op == 'load_chunk':
+            # 每次最多 512 KiB，避免百 MB 恢复正文占满全局锁、管道缓冲及客户端超时。
+            # 保留上面的旧 load 协议，升级时在途旧 Runner 仍可完成。
+            offset, size = req.get('offset'), req.get('size')
+            if type(offset) is not int or type(size) is not int or offset < 0 or not 1 <= size <= RESTORE_CHUNK_BYTES:
+                raise ValueError('非法恢复分块范围')
+            target = folder / (slug + '.ndjson')
+            with target.open('rb') as stream:
+                stream.seek(offset)
+                chunk = stream.read(size)
+            return {'offset': offset, 'data': base64.b64encode(chunk).decode('ascii')}
         if op == 'pending':
             # 缺省 value 表示清空未完成局，兼容调用方省略该字段的情况。
             atomic(private / 'round.json', req.get('value'))

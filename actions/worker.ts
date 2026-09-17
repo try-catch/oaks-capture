@@ -5,6 +5,7 @@ import { isIP } from 'node:net';
 import { spawnSync, fork } from 'node:child_process';
 import { installCaptureRuntime, PendingRound } from '../src/capture-runtime';
 import { CoordinatorChannel } from '../src/coordinator-channel';
+import { restoreData } from '../src/restore-data';
 
 const root = path.resolve(__dirname, '..');
 const run = `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
@@ -236,7 +237,7 @@ async function runThread(): Promise<void> {
   const registry = await readRegistry();
   installDurability();
   deadline = Date.now() + numberFromEnv('OAKS_DEADLINE_MINUTES', 40) * 60_000;
-  while (!stopping) {
+  while (!stopped()) {
     let claimed: any;
     try {
       claimed = rpc('claim');
@@ -255,12 +256,23 @@ async function runThread(): Promise<void> {
     }
     slug = claimed.slug;
     deadline = claimed.deadline;
-    const game = registry.games.find(game => game.slug === slug);
-    if (!game) throw new Error('Runner 目录与测试服目录不一致');
-    const restored = rpc('load');
     const directory = path.join(root, 'output', slug);
-    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    for (const [name, value] of Object.entries(restored.files)) fs.writeFileSync(path.join(directory, name), String(value), { mode: 0o600 });
+    const game = registry.games.find(game => game.slug === slug);
+    try {
+      if (!game) throw new Error('REGISTRY_MISMATCH');
+      const restored = rpc('load', { chunked: true });
+      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+      restoreData(path.join(directory, `${slug}.ndjson`), restored.dataBytes,
+        (offset, size) => rpc('load_chunk', { offset, size }), stopped);
+      for (const [name, value] of Object.entries(restored.files)) fs.writeFileSync(path.join(directory, name), String(value), { mode: 0o600 });
+    } catch {
+      // 准备阶段没有发官方请求或新数据；不要写回半份覆盖率，也不遗留 running 租约。
+      const status = stopped() ? 'paused' : 'failed';
+      try { rpc('done', { status, reason: 'RESTORE_FAILED' }); } catch { /* 通道不可用时由 end 收口。 */ }
+      realLog(JSON.stringify({ worker, slug, phase: 'restore', status, reason: 'RESTORE_FAILED' }));
+      if (status === 'failed') process.exitCode = 1;
+      break;
+    }
     pending = undefined;
     requestKey = undefined;
     console.log(JSON.stringify({ worker, slug, phase: 'claimed', deadline }));
@@ -271,7 +283,7 @@ async function runThread(): Promise<void> {
     const originalWarn = console.warn;
     console.log = console.warn = () => {};
     try {
-      await captureGame(game);
+      await captureGame(game!);
       console.log = originalLog;
       console.warn = originalWarn;
       for (const script of ['validate-data.ts', 'audit-mongo.ts', 'finalize-data.ts']) {
@@ -356,7 +368,8 @@ async function main(): Promise<void> {
   if (mode === 'check') {
     requireGithubHosted();
     try {
-      rpc('status');
+      const status = rpc('status');
+      if (status.restoreChunkBytes !== 512 * 1024) throw new Error('协调器尚未支持分块恢复，禁止启动新采集');
     if (!process.env.OAKS_MONGO_URI) throw new Error('缺少受控 Mongo 连接');
     const { MongoClient } = await import('mongodb');
     const client = new MongoClient(process.env.OAKS_MONGO_URI, { serverSelectionTimeoutMS: 10_000 });

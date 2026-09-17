@@ -37,6 +37,9 @@
 
 ### 2026-09-17 派发判定修正（优先于历史轮次结论）
 
+- 单轮监督目标 3 分钟、最长 5 分钟；完成两次健康采样后只做必要判断并退出，不留后台扫描任务。若预算内不能安全完成门禁，不派发，报告具体阻塞后结束本轮，不能跳过门禁或不断重复调查同一历史失败。
+- 采集期间禁止全量读取、wc -l 或扫描 NDJSON、hashes.txt；进度使用 Mongo estimatedDocumentCount、协调器统计和文件元数据。禁止用长时间全盘扫描制造 I/O 压力后再误判采集过载。
+- 所有 SSH 必须使用 StrictHostKeyChecking=yes 和既有可信 known_hosts；禁止 no、accept-new、清空 known_hosts 或绕过主机指纹验证。校验失败时停止并报告，不自动放宽。
 - 时间线必须以 GitHub API 最近至少 30 条 capture.yml 运行的 created_at/updated_at 为依据，统一换算 Asia/Hong_Kong。queue.json 的写入时间、单轮统计、聊天中的上次快照都不能证明中间没有运行。08:35 结束、08:40 派发属于正常衔接，不能据此宣布停摆。
 - 无论是否有在途运行，健康检查始终保留；不要反复下载全量 job 日志或扫描数 GB NDJSON。只有有新故障签名时才提取少量相关日志。GitHub conclusion=failure 不等于所有游戏失败；预算结束后的 job 非零退出、仍标 running 的历史 claim 均不能单独算成失败游戏，也不能据此无限期冻结派发。早期退出/RESTORE_FAILED 必须单独计入真实恢复失败。
 - 曾经的整包恢复问题已改为 load(chunked=true) 元数据 + 每次最多 512 KiB 的 load_chunk，准备失败会明确回写 failed/paused。不得在新版本之后继续引用旧 run 35136745203 的同一失败永久阻止派发。先核实公开 worker、测试服协调器支持分块，再以修复后的最近完成轮评价是否复发。

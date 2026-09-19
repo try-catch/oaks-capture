@@ -162,6 +162,7 @@ function installDurability(): void {
       requestKey = undefined;
     },
     noteMongo: ms => { timing.mongo += ms; },
+    sessionReady: game => realLog(JSON.stringify({ worker, slug: game, phase: 'session-ready' })),
     syncFiles,
     shouldStop: stopped,
   });
@@ -233,7 +234,7 @@ async function runThread(): Promise<void> {
   // 单次调用不再限制新增局数：由配额达标或本轮 deadline 决定何时收工。
   process.argv = [process.execPath, __filename, '--rounds', '1000000', ...quotaArgs];
   const { readRegistry } = await import('../catalog-sync');
-  const { captureGame } = await import('../oaks');
+  const { captureGame, gameRegistrationUnavailable } = await import('../oaks');
   const registry = await readRegistry();
   installDurability();
   deadline = Date.now() + numberFromEnv('OAKS_DEADLINE_MINUTES', 40) * 60_000;
@@ -301,6 +302,7 @@ async function runThread(): Promise<void> {
       else if (message === 'ACTIONS_HALTED') { status = 'halted'; stopping = true; }
       else if (message === 'ACTIONS_BUDGET') { status = 'paused'; stopping = true; }
       else if (/租约不属于当前节点/.test(message)) { status = 'released'; stopping = true; }
+      else if (gameRegistrationUnavailable(error)) status = 'unavailable';
       else if (!message.includes('达到本轮上限')) { status = 'failed'; stopping = true; process.exitCode = 1; }
     } finally {
       console.log = originalLog;

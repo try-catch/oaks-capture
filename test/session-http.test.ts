@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fetchText, ProtocolHttpError, ProtocolStatusError } from '../src/protocol';
-import { permanentSessionError } from '../oaks';
+import { gameRegistrationUnavailable, permanentSessionError } from '../oaks';
 
 test('启动页 HTTP 错误保留状态和 Retry-After，不能泄露 URL token', async () => {
   const original = globalThis.fetch;
@@ -24,4 +24,13 @@ test('明确拒绝和不存在的入口不重复重试，暂时性故障仍可�
   assert.equal(permanentSessionError(new ProtocolHttpError('', 503, 0)), false);
   assert.equal(permanentSessionError(new ProtocolStatusError('SESSION_EXPIRED', '')), false);
   assert.equal(permanentSessionError(new Error('network')), false);
+});
+
+test('只跳过当前不可注册游戏，账号和节点封控不能被降级为跳过', () => {
+  assert.equal(gameRegistrationUnavailable(new ProtocolHttpError('', 404, 0)), true);
+  assert.equal(gameRegistrationUnavailable(new ProtocolHttpError('', 410, 0)), true);
+  assert.equal(gameRegistrationUnavailable(new ProtocolStatusError('GAME_NOT_ALLOWED', '')), true);
+  assert.equal(gameRegistrationUnavailable(new ProtocolHttpError('', 401, 0)), false);
+  assert.equal(gameRegistrationUnavailable(new ProtocolHttpError('', 403, 0)), false);
+  assert.equal(gameRegistrationUnavailable(new ProtocolStatusError('PLAYER_LOCKOUT', '')), false);
 });

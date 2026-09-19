@@ -39,6 +39,7 @@
 
 ### 2026-09-19 上游入口故障与恢复（优先级最高）
 
+- 恢复 capture 后，每款游戏必须先通过官方 launch/login/start 并出现 `phase=session-ready`，才允许该游戏 spin。404/410 或 GAME_NOT_ALLOWED 只把当前游戏标记 unavailable 并继续认领下一款；401/403、PLAYER_LOCKOUT、429 或全局健康门禁仍按安全规则停止/等待，不能降级为跳过。监督结论必须分别统计 session-ready、unavailable、failed，不能把跳过游戏算成采集成功。
 - 真实故障基线：capture run 35425587169 全部 60 租约失败，360 次响应、零新增；单节点诊断 35435650848 于香港时间 17:47 在 GitHub-hosted Runner 证实官网 home=200、catalog=200、launch=404。不是定时器停机，也不能把代码提交当成上游已修复。
 - 维持本来的每 20 分钟健康检查。当前同一 404 故障未恢复时，不再派发 20 节点 capture；不清除 Retry-After、不更换账号/代理/指定出口。
 - 为避免只能等人工宣布恢复，允许在完整健康门禁、限流和队列锁检查通过后，最多每 60 分钟派发一次现有 diagnose.yml（首个基准为 35435650848）。用 GitHub API 的诊断运行 created_at 判定间隔，查不到记录则不猜测；capture.yml 与 diagnose.yml 的所有在途运行都必须纳入互斥检查。

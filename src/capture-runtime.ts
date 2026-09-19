@@ -15,6 +15,8 @@ export interface CaptureRuntime {
   syncFiles(): void;
   /** 每局 Mongo 写入耗时（毫秒），用于定位剩余瓶颈。 */
   noteMongo?(ms: number): void;
+  /** 官方 launch/login/start 已通过；此回调之后才允许发出 spin。 */
+  sessionReady?(game: string): void;
   shouldStop(): boolean;
 }
 export let captureRuntime: CaptureRuntime | undefined;

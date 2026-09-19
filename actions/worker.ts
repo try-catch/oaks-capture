@@ -360,7 +360,8 @@ async function main(): Promise<void> {
       if (!claim.slug) throw new Error('无可诊断游戏');
       slug = claim.slug;
       installDurability();
-      // 仅固定官方公开入口，不登录、不下注、不打印正文/重定向参数/会话信息。
+      // 仅固定官方公开入口；入口恢复后验证登录/start，不下注、不打印会话信息。
+      let launchReady = false;
       for (const [stage, url] of [
         ['home', 'https://3oaks.com/'],
         ['catalog', 'https://3oaks.com/api/v1/games'],
@@ -370,6 +371,28 @@ async function main(): Promise<void> {
         console.log(JSON.stringify({ phase: 'upstream-probe', stage, slug,
           status: response.status, html: response.headers.get('content-type')?.includes('text/html') === true,
           githubHosted: process.env.RUNNER_ENVIRONMENT === 'github-hosted' }));
+        if (stage === 'catalog' && response.ok) {
+          const data = await response.json() as any;
+          console.log(JSON.stringify({ phase: 'catalog-shape', itemCount: data.data?.items?.length ?? 0,
+            itemFields: Object.keys(data.data?.items?.[0] ?? {}).filter(key => /^[a-z_]+$/.test(key)) }));
+        }
+        if (stage === 'launch') launchReady = response.ok;
+      }
+      if (launchReady) {
+        const { readRegistry } = await import('../catalog-sync');
+        const { openSession, ProtocolHttpError, ProtocolStatusError } = await import('../src/protocol');
+        const game = (await readRegistry()).games.find(game => game.slug === slug);
+        if (!game?.discovery) throw new Error('缺少已核实定义');
+        try { await openSession(game.discovery); }
+        catch (error) {
+          const code = error instanceof ProtocolStatusError && /^[A-Z_]{1,64}$/.test(error.code) ? error.code : 'SESSION_FAILED';
+          console.log(JSON.stringify({ phase: 'upstream-probe', stage: 'session-error', slug, code,
+            status: error instanceof ProtocolHttpError ? error.status : undefined }));
+          throw error;
+        }
+        console.log(JSON.stringify({ phase: 'upstream-probe', stage: 'session-ready', slug }));
+      } else {
+        process.exitCode = 1;
       }
       rpc('done', { status: 'paused', count: claim.baselineCount ?? 0 });
     } finally {

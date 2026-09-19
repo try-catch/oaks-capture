@@ -37,6 +37,17 @@
 
 ## 每次执行（每 20 分钟）
 
+### 2026-09-19 上游入口故障与恢复（优先级最高）
+
+- 真实故障基线：capture run 35425587169 全部 60 租约失败，360 次响应、零新增；单节点诊断 35435650848 于香港时间 17:47 在 GitHub-hosted Runner 证实官网 home=200、catalog=200、launch=404。不是定时器停机，也不能把代码提交当成上游已修复。
+- 维持本来的每 20 分钟健康检查。当前同一 404 故障未恢复时，不再派发 20 节点 capture；不清除 Retry-After、不更换账号/代理/指定出口。
+- 为避免只能等人工宣布恢复，允许在完整健康门禁、限流和队列锁检查通过后，最多每 60 分钟派发一次现有 diagnose.yml（首个基准为 35435650848）。用 GitHub API 的诊断运行 created_at 判定间隔，查不到记录则不猜测；capture.yml 与 diagnose.yml 的所有在途运行都必须纳入互斥检查。
+- 诊断只访问固定官方首页/目录/启动入口，入口成功后检查正常登录/start，不 spin、不写采集数据。只认可升级后诊断日志含 stage=session-ready 且 conclusion=success 为入口与会话恢复证据；旧诊断 35435650848 的 success 仅表示诊断程序执行完成，启动页实际 404，绝不是恢复。
+- 若诊断为 404/410，则维持健康监督并等待下一次允许的诊断；若出现 401/403、GAME_NOT_ALLOWED 或 PLAYER_LOCKOUT，则停止自动上游探测和采集，通知用户核实入口/服务商授权，不能靠定时换 Runner 验证授权绕过。记录最后一次具体诊断 run，不反复下载历史日志。
+- session-ready 后重新完成两次间隔至少 30 秒的完整健康检查，确认两个 workflow 均无在途运行、owner=null、冷却已过、唯一索引完整，再自动派发一次 capture 恢复验证。若仍系统性失败则据新证据停派，不盲目反复。
+- 诊断的 begin/end 会重置协调器本轮 metrics；诊断的零数据和 paused claim 不代表 capture 产出或完成。采集结论依据最近 capture run 与 Mongo/NDJSON 增量，禁止拿诊断覆盖的 metrics 误判。
+- 正常等待保持安静；新故障、需要授权处理、恢复实际写入或全部完成时才通知。诊断由同一 ZCode 定时任务监督，不新建任何定时器。
+
 ### 2026-09-17 派发判定修正（优先于历史轮次结论）
 
 - 健康检查直接复用本地已验证脚本，不再临场摸索协议/凭据/目录：`ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -i /Users/xx/work/backup/misc/服务器/api_server_20260731.pem ubuntu@52.87.94.113 'sudo python3 -' < /Users/xx/work/api/api/api.numeric/capture/capture-oaks/actions/supervisor-health.py`。相隔至少 30 秒执行两次，按输出 at 和 mongo.totalCreated 的差计算连接速率；两次 hostHealthy=true、107 库、missing=[]、协调器与限流门禁均通过才可派发。脚本只读元数据，不发官方请求；失败时禁止派发，不放宽 SSH 校验。

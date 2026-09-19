@@ -69,7 +69,8 @@ export function sessionSpinSettings(start: JSONMap, fallback: SpinSettings): Spi
 
 export async function fetchText(url: string, headers: HeadersInit = {}): Promise<{ text: string; headers: Headers }> {
   const response = await fetch(url, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}: ${url}`);
+  if (!response.ok) throw new ProtocolHttpError(`LAUNCH_HTTP_${response.status}`,
+    response.status, parseRetryAfter(response.headers.get("retry-after")));
   return { text: await response.text(), headers: response.headers };
 }
 

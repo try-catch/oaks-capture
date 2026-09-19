@@ -71,6 +71,11 @@ async function waitForRetry(delayMs: number, game: RegistryGame): Promise<void> 
   }
 }
 
+export function permanentSessionError(error: unknown): boolean {
+  return (error instanceof ProtocolHttpError && [401, 403, 404, 410].includes(error.status))
+    || (error instanceof ProtocolStatusError && ["GAME_NOT_ALLOWED", "PLAYER_LOCKOUT"].includes(error.code));
+}
+
 async function openSessionWithRetry(
   game: RegistryGame,
   definition: NonNullable<RegistryGame["discovery"]>,
@@ -82,6 +87,8 @@ async function openSessionWithRetry(
       return await openSession(definition);
     } catch (error) {
       lastError = error;
+      // 入口不存在或授权明确拒绝时，重试同一请求不会修复配置，停止该游戏并保留数据。
+      if (permanentSessionError(error)) throw error;
       if (attempt > maxRetries) break;
       // 会话建立失败在持久化模式下同样要重试：官方会重开会话，
       // 一次登录失败不应该让整个游戏在本轮失败。

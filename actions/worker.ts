@@ -341,6 +341,42 @@ async function supervise(): Promise<void> {
 
 async function main(): Promise<void> {
   const mode = process.argv[2];
+  if (mode === 'probe') {
+    requireGithubHosted();
+    requireProviderAuthorization();
+    egress = await discoverEgress();
+    let owned = false;
+    try {
+      const current = rpc('status');
+      if (current.owner || current.until > Date.now() || !current.serverHealth?.healthy) {
+        throw new Error('诊断门禁未通过');
+      }
+      const begun = rpc('begin', { githubToken: process.env.OAKS_GITHUB_TOKEN,
+        threads: 1, nodes: 1, nodeMs: 3000, throttleLimit: 1,
+        maxInFlight: 1, maxClaims: 1, deadlineMinutes: 3 });
+      owned = true;
+      deadline = begun.deadline;
+      const claim = rpc('claim');
+      if (!claim.slug) throw new Error('无可诊断游戏');
+      slug = claim.slug;
+      installDurability();
+      // 仅固定官方公开入口，不登录、不下注、不打印正文/重定向参数/会话信息。
+      for (const [stage, url] of [
+        ['home', 'https://3oaks.com/'],
+        ['catalog', 'https://3oaks.com/api/v1/games'],
+        ['launch', `https://3oaks.com/api/v1/games/${encodeURIComponent(slug)}/play?lang=en`],
+      ]) {
+        const response = await fetch(url);
+        console.log(JSON.stringify({ phase: 'upstream-probe', stage, slug,
+          status: response.status, html: response.headers.get('content-type')?.includes('text/html') === true,
+          githubHosted: process.env.RUNNER_ENVIRONMENT === 'github-hosted' }));
+      }
+      rpc('done', { status: 'paused', count: claim.baselineCount ?? 0 });
+    } finally {
+      try { if (owned) rpc('end'); } finally { channel.close(); }
+    }
+    return;
+  }
   // 常驻通道会吊住事件循环，每个模式结束时都必须显式收尾，否则进程跑完不退出。
   if (mode === 'thread') { try { await runThread(); } finally { channel.close(); } return; }
   if (mode === 'begin') {

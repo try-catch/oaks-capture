@@ -1,6 +1,6 @@
 {
   "purpose": "改动本文件并推送到 main 会触发一次真实采集运行；普通代码推送不会触发。",
-  "note": "验证 wxgame99 新入口并启动一轮真实采集",
+  "note": "清理陈旧测试后再次验证 wxgame99 新入口",
   "requestedBy": "codex",
-  "requestedAt": "2026-09-23T05:55:00Z"
+  "requestedAt": "2026-09-23T06:08:00Z"
 }

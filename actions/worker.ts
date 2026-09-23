@@ -80,7 +80,7 @@ function numberFromEnv(name: string, fallback: number): number {
 }
 function activeThreads(): number {
   const nodes = numberFromEnv('OAKS_NODES', 1);
-  const maxClaims = numberFromEnv('OAKS_MAX_CLAIMS', 60);
+  const maxClaims = numberFromEnv('OAKS_MAX_CLAIMS', 24);
   return Math.min(numberFromEnv('OAKS_THREADS', 8), Math.ceil(maxClaims / nodes));
 }
 async function discoverEgress(): Promise<string> {
@@ -192,7 +192,7 @@ function installDurability(): void {
     try {
       response = await officialFetch(input, { ...options, signal: AbortSignal.timeout(20_000) });
     } catch (error) {
-      // 网络失败也要归还小型许可，避免 60 个偶发超时把全局许可永久占满。
+      // 网络失败也要归还小型许可，避免偶发超时把全局许可永久占满。
       rpc('response', { key, status: 0, usable: false, businessCode: 'FETCH_ERROR' });
       throw error;
     }
@@ -421,7 +421,7 @@ async function main(): Promise<void> {
       throttleLimit: Math.min(numberFromEnv('OAKS_THROTTLE_LIMIT', 4), Math.ceil(threads / 2)),
       maxInFlight: threads * nodes,
       // 同时活跃的官方游戏会话数必须限制：demo 后端在大量并发会话时返回 GAME_REOPENED。
-      maxClaims: numberFromEnv('OAKS_MAX_CLAIMS', 60),
+      maxClaims: numberFromEnv('OAKS_MAX_CLAIMS', 24),
         deadlineMinutes: numberFromEnv('OAKS_DEADLINE_MINUTES', 40),
       })));
     } finally { channel.close(); }

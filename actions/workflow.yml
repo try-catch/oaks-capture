@@ -43,9 +43,9 @@ env:
   OAKS_THROTTLE_LIMIT: '6'
   OAKS_DEADLINE_MINUTES: '45'
   OAKS_SPIN_DELAY_MS: '1000'
-  # 恢复已验证的正式采集规模：20 个节点各 3 个 worker、全局 60 个活跃游戏。
-  # 107 个会话会触发大面积 GAME_REOPENED，因此仍不允许放大到线程总数 160。
-  OAKS_MAX_CLAIMS: '60'
+  # 24 是历史压测的吞吐最优点；60 个会话会让共享测试服连续触发 CPU PSI 保护停轮。
+  # 每节点仍只按预算启动 2 个 worker，全局活跃游戏硬限制为 24。
+  OAKS_MAX_CLAIMS: '24'
   # 常驻长连接：单次协调往返从 1-2 秒降到毫秒级。1 启用，0 关闭。
   OAKS_PERSISTENT_CHANNEL: '1'
 

@@ -49,11 +49,11 @@ test("定时采集与链式续跑处于停止状态（2026-09-13 交由 Codex �
 
 test("同时活跃的官方会话数受限，不能等于线程总数", () => {
   // 会话数必须独立于线程数可调：历史上把两者绑在一起时，107 个并发会话
-  // 让 103 个游戏立刻 GAME_REOPENED；正式采集维持已验证的 60 个会话。
+  // 让 103 个游戏立刻 GAME_REOPENED；正式采集维持历史压测最优的 24 个会话。
   const configured = workflow.match(/OAKS_MAX_CLAIMS:\s*'(\d+)'/);
   assert.ok(configured, '缺少 OAKS_MAX_CLAIMS');
   assert.ok(Number(configured![1]) < 8 * 20, '会话数不应等于线程总数');
-  assert.match(worker, /maxClaims: numberFromEnv\('OAKS_MAX_CLAIMS', 60\)/);
+  assert.match(worker, /maxClaims: numberFromEnv\('OAKS_MAX_CLAIMS', 24\)/);
   assert.doesNotMatch(worker, /maxClaims: threads \* nodes/);
 });
 

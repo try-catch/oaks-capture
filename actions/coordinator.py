@@ -26,7 +26,7 @@ GLOBAL_LIMIT_NODES = 2
 GLOBAL_LIMIT_WINDOW_MS = 120_000
 # 429 未给出 Retry-After 时的保守等待。
 CONSERVATIVE_WAIT_MS = 60_000
-# 满额 claim 的退避区间。60 个租约占满后，空闲 worker 若固定 3 秒轮询，
+# 满额 claim 的退避区间。租约占满后，空闲 worker 若固定 3 秒轮询，
 # 仍会产生无效的空转 claim（各带一次 SSH 往返），
 # 在已经过载的测试服上叠加控制面风暴。指数退避把稳定态压到每次切换的少量探测。
 CLAIM_WAIT_BASE_MS = 1500
@@ -34,7 +34,7 @@ CLAIM_WAIT_MAX_MS = 30_000
 # claimWaits 的条目上限：长跑时不因为节点标识累积而无限增长。
 CLAIM_WAITS_LIMIT = 200
 # 每个游戏累计若干条后再做一次同步写。Mongo 已经逐局 acknowledged，服务端
-# NDJSON 是恢复副本；按游戏分组提交可把 60 个活跃游戏的 fsync 从约 60 次/秒
+# NDJSON 是恢复副本；按游戏分组提交可把活跃游戏的 fsync 从每条一次
 # 降到约 2.4 次/秒，同时在正常结束时补做最终同步。
 DATA_FSYNC_EVERY = 25
 # 线程身份为 <节点>.<线程>，节点身份用于出口熔断，线程身份用于游戏租约。

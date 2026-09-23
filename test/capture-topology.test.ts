@@ -25,19 +25,19 @@ test("20 个节点只保留全局会话预算所需的 worker 子进程", () => 
   const maxClaims = Number(envValue("OAKS_MAX_CLAIMS").replace(/['"]/g, ""));
   const authorizedThreads = Number(envValue("OAKS_THREADS").replace(/['"]/g, ""));
   assert.equal(nodes, 20);
-  assert.equal(maxClaims, 60);
+  assert.equal(maxClaims, 24);
   // OAKS_THREADS 是与服务商书面授权的上限，不是每节点实际要 fork 的子进程数。
-  // 实际值必须收敛到 ceil(maxClaims / nodes)：20 节点 × 60 会话 = 每节点 3 个。
-  assert.equal(Math.min(authorizedThreads, Math.ceil(maxClaims / nodes)), 3);
+  // 实际值必须收敛到 ceil(maxClaims / nodes)：20 节点 × 24 会话 = 每节点 2 个。
+  assert.equal(Math.min(authorizedThreads, Math.ceil(maxClaims / nodes)), 2);
   assert.match(worker, /Math\.min\(numberFromEnv\('OAKS_THREADS', 8\), Math\.ceil\(maxClaims \/ nodes\)\)/);
   assert.doesNotMatch(worker, /const threads = numberFromEnv\('OAKS_THREADS', 8\)/);
   // 两条启动路径都必须走收敛后的线程数：supervise 产子进程、begin 上报预算。
   assert.ok((worker.match(/activeThreads\(\)/g) ?? []).length >= 3, "activeThreads 未覆盖全部启动路径");
 });
 
-test("同时活跃的写入者硬限制为 60，不能被派发参数放大", () => {
+test("同时活跃的写入者硬限制为 24，不能被派发参数放大", () => {
   // 旧版 workflow 允许 benchmark 把 max_claims 调到 120，等于绕过正式采集上限。
-  assert.equal(envValue("OAKS_MAX_CLAIMS"), "'60'");
+  assert.equal(envValue("OAKS_MAX_CLAIMS"), "'24'");
   assert.doesNotMatch(workflow, /inputs\.max_claims/);
   assert.doesNotMatch(workflow, /'40', '60', '80'/);
 });

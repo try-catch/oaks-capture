@@ -8,8 +8,8 @@
 
 1. 官方请求只能由 GitHub-hosted Linux Runner 发出。不得在本机或测试服直接采集，不得使用代理、指定地区、轮换账号或主动轮换出口。
 2. 允许的动作只有：查询 GitHub Actions、仓库变量、测试服协调器/MongoDB 完成量；在门禁要求时单独补一个缺失索引；满足条件时派发一次现有 `capture.yml`；**以及在下文"运行期健康介入"判定失守时取消在途运行**。除这一项保护性取消外，不得取消、重跑或删除 GitHub 运行，不得修改代码。
-3. 公开仓库 `main` 必须至少包含 `021f3b7`。在人工压测完成前保持 `CAPTURE_ENABLED=false`；收到恢复指令后才设为 `true`，同时保持 `BENCHMARK_ENABLED=false`。正式 workflow 固定最多 60 个活跃游戏/Mongo 写入者：`OAKS_MAX_CLAIMS` 是字面量 `'60'`，不得被派发参数放大，不得派发 benchmark。单会话间隔 1000ms，单节点请求间隔 250ms。
-4. 每节点 worker 子进程数由 `activeThreads()` 收敛为 `min(OAKS_THREADS, ceil(maxClaims / nodes))`：20 节点 × 60 会话时每节点 fork 3 个子进程，共 60 条常驻 SSH 控制通道。不得绕过它直接使用授权线程数，避免回到旧版 20×8=160 条控制通道。
+3. 公开仓库 `main` 必须包含当前修复基线。在人工压测完成前保持 `CAPTURE_ENABLED=false`；收到恢复指令后才设为 `true`，同时保持 `BENCHMARK_ENABLED=false`。正式 workflow 固定最多 24 个活跃游戏/Mongo 写入者：`OAKS_MAX_CLAIMS` 是字面量 `'24'`，不得被派发参数放大，不得派发 benchmark。单会话间隔 1000ms，单节点请求间隔 250ms。
+4. 每节点 worker 子进程数由 `activeThreads()` 收敛为 `min(OAKS_THREADS, ceil(maxClaims / nodes))`：20 节点 × 24 会话时每节点 fork 2 个子进程，竞争全局 24 个游戏租约。不得绕过它直接使用授权线程数，避免回到旧版 20×8=160 条控制通道。
 5. 满额 claim 由协调器指数退避（`CLAIM_WAIT_BASE_MS` 1500ms 起，上限 `CLAIM_WAIT_MAX_MS` 30s），客户端原样遵守。不得改回固定 3 秒轮询：那会让未拿到租约的节点形成控制面风暴，在已过载的测试服上叠加约 5 次/秒的空转 claim 与 SSH 往返。
 6. `PLAYER_LOCKOUT` 且消息声明 jurisdiction/legal reasons 时属于该 GitHub Runner 的地区限制。记录 Runner 和游戏并停止该节点，其他节点继续；后续轮次仍可接受 GitHub 正常随机分配的新 Runner，但不得使用代理、指定地区、轮换账号或主动轮换出口。单轮受影响节点少于 10/20 时不构成全局停采条件，达到或超过一半才停止整轮并通知用户。
 7. HTTP 429 必须遵守 `Retry-After`。两个及以上节点同时限速时让协调器全局暂停；单节点达到熔断条件时保留数据、交回租约，不得绕过冷却。
@@ -88,7 +88,7 @@
 
 - 报告负载时必须区分**基线过载**与**采集增量**。判据是采集停止后 `load1` 是否回落、以及 `nr_running` 是否与之匹配，而不是负载绝对值。实测采集完全停止后 `load1` 仍可达 90–114，而同一时刻 `nr_running` 只有 1–5，说明这类高负载来自 `api-server` 的突发连接风暴，不是采集。
 - 不得把全部 load 归因于采集，也不得因为基线高就放大采集并发。
-- 采集侧已消除的增量，若退化即为必须修复的回归：每节点只按预算启动 3 个子进程（总计 60，旧版 160）、满额指数退避（旧版约 50 次/秒空转 claim）、Mongo 连接池 `maxPoolSize=1`、Runner 本地响应缓存、25 条成组恢复副本、成组 fsync。
+- 采集侧已消除的增量，若退化即为必须修复的回归：每节点只按预算启动 2 个子进程（最多 40 个，竞争全局 24 个租约；旧版 160）、满额指数退避（旧版约 50 次/秒空转 claim）、Mongo 连接池 `maxPoolSize=1`、Runner 本地响应缓存、25 条成组恢复副本、成组 fsync。
 - **恢复派发的前提是 PSI、实时 blocked、内存、swap 活动全部回到门禁以内且 Mongo 连接增长稳定**，而不是"采集已经停了"。基线未恢复时不得派发。
 
 正常运行或等待中的状态不通知。不要打印 GitHub token、SSH 密钥、Mongo URI、原始响应或任何会话字段，不要上传数据到 GitHub artifact。

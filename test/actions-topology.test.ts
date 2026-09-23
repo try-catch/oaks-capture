@@ -15,7 +15,8 @@ test("定时检查为每二十分钟一次且保留手工 check/capture 入口",
 });
 
 test("CAPTURE_ENABLED 是硬门禁，且推送触发只认专用文件", () => {
-  assert.match(workflow, /if: needs\.prepare\.result == 'success' && needs\.prepare\.outputs\.capture == 'true'/);
+  assert.match(workflow, /echo 'capture=run'/);
+  assert.match(workflow, /if: needs\.prepare\.result == 'success' && needs\.prepare\.outputs\.capture == 'run'/);
   assert.doesNotMatch(workflow, /github\.event_name == 'schedule' \|\| github\.event_name == 'push'/);
   // 推送触发必须限定在专用文件上，普通代码推送不能启动真实采集。
   assert.match(workflow, /paths:\s*\n\s*-\s*'capture-trigger\.json'/);

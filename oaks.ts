@@ -57,6 +57,7 @@ export function recoverableRoundError(error: unknown): boolean {
   if (error instanceof ProtocolStatusError) return RECOVERABLE_ROUND_CODES.includes(error.code);
   const message = error instanceof Error ? error.message : String(error);
   return RECOVERABLE_ROUND_CODES.some((code) => message.includes(code))
+    || message === "fetch failed"
     || message.includes("业务失败")
     || message.includes("禁止自动重放");
 }

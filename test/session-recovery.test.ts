@@ -38,6 +38,7 @@ test("会话重开与结果未知都只丢弃这一局，普通错误仍然直�
   assert.equal(recoverableRoundError(new ProtocolStatusError("SERVER_ERROR", "play: server error")), true);
   assert.equal(recoverableRoundError(new ProtocolHttpError("503", 503, 0)), true);
   assert.equal(recoverableRoundError(new ProtocolStatusError("FUNDS_EXCEED", "play: funds")), true);
+  assert.equal(recoverableRoundError(new TypeError("fetch failed")), true);
   assert.equal(recoverableRoundError(new Error("结果缺少当前局 total_win/round_win")), false);
 });
 

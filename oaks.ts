@@ -13,7 +13,7 @@ import { numberOption, selectGames, stringOption } from "./src/cli";
 import { classifyRound, discoverFeatureInventory, FeatureInventory, includeObservedFeatures } from "./src/features";
 import { discoverGame } from "./src/game-definition";
 import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, syncMongoRounds, upsertMongoRound, upsertMongoRounds } from "./src/mongo-store";
-import { actionFeatureKey, actionSpinType, command, JSONMap, nextAction, openSession, protocolAction, ProtocolHttpError, ProtocolStatusError, roundSpinType, Session } from "./src/protocol";
+import { actionFeatureKey, actionSpinType, command, JSONMap, nextAction, openSession, protocolAction, ProtocolHttpError, ProtocolStatusError, roundBet, roundSpinType, Session } from "./src/protocol";
 import { buildPlayableActions, discoverShop, PlayAction, ShopInventory } from "./src/shop";
 import { validateGameRound } from "./src/validators";
 
@@ -48,7 +48,7 @@ export function selectedModeTypes(expected: number[], requested: number[]): numb
 }
 
 // 官方会话被重开后，当前这一局已经无法完成，但游戏本身可以继续。
-const RECOVERABLE_ROUND_CODES = ["GAME_REOPENED", "GAME_CLOSED", "SESSION_EXPIRED", "SESSION_NOT_FOUND", "SERVER_ERROR"];
+const RECOVERABLE_ROUND_CODES = ["GAME_REOPENED", "GAME_CLOSED", "SESSION_EXPIRED", "SESSION_NOT_FOUND", "SERVER_ERROR", "FUNDS_EXCEED"];
 
 // “这一局不能再用了”的原因：官方业务失败（含会话重开），
 // 或协调器判定上一轮结果未知而拒绝重放。两种情况都只需丢弃未完成帧并重新登录。
@@ -241,7 +241,9 @@ function actionCostMultiplier(action: PlayAction, shop: ShopInventory): number {
 
 // 配额依据冻结的模式列表计算，重新登录不能让尚未完成的购买模式消失。
 export function remainingModeActions(actions: PlayAction[], counts: Record<number, number>, normal: number, special: number): PlayAction[] {
-  return actions.filter(action => (counts[actionSpinType(action)] ?? 0) < (actionSpinType(action) === 0 ? normal : special));
+  return actions
+    .filter(action => (counts[actionSpinType(action)] ?? 0) < (actionSpinType(action) === 0 ? normal : special))
+    .sort((left, right) => Number(actionSpinType(left) === 0) - Number(actionSpinType(right) === 0));
 }
 
 export async function captureGame(
@@ -347,7 +349,8 @@ export async function captureGame(
       const rawFrames = await playRound(session, action);
       attempted++;
       const frames = sanitizeProtocolData(rawFrames) as JSONMap[];
-      const validation = validateGameRound(game, frames, session.defaultBet);
+      const capturedBet = roundBet(frames);
+      const validation = validateGameRound(game, frames, capturedBet);
       if (includeObservedFeatures(inventory, frames)) {
         for (const feature of inventory.required) if (!required.includes(feature)) required.push(feature);
         await fs.writeFile(path.join(outputDir, "feature-inventory.json"), JSON.stringify(inventory));
@@ -362,8 +365,8 @@ export async function captureGame(
         game: game.slug,
         data: frames,
         bonus: frames.length > 1 ? 1 : 0,
-        mul: validation.win / session.defaultBet,
-        bet: session.defaultBet,
+        mul: validation.win / capturedBet,
+        bet: capturedBet,
         buy: actionSpinType(action),
         actionName: action.name,
         selectedMode: Number(action.params.selected_mode ?? 0),

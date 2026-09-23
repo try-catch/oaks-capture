@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { playRound } from '../oaks';
 import { installCaptureRuntime, PendingRound } from '../src/capture-runtime';
-import type { Session } from '../src/protocol';
+import { roundBet, type Session } from '../src/protocol';
 import type { PlayAction } from '../src/shop';
 
 test('恢复特殊局时复用已有帧和会话，不重新发起基础 spin', async () => {
@@ -46,4 +46,14 @@ test('首帧及奖励续帧采用官方 Runner 请求字段，不发送仅供 UI
       assert.equal('bet' in call, false);
     }
   } finally { globalThis.fetch = original; }
+});
+
+test('入库下注以 play 首帧实际 round_bet 为准', () => {
+  const frames = [{
+    context: {
+      current: 'spins',
+      spins: { bet_per_line: 1, lines: 25, round_bet: 10 },
+    },
+  }];
+  assert.equal(roundBet(frames), 10);
 });

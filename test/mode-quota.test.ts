@@ -9,12 +9,17 @@ const second: PlayAction = {name: "buy_spin", params: {selected_mode: 2}, spinTy
 const booster: PlayAction = {name: "spin", params: {selected_mode: 1, ante_bet: 2}};
 const actions = [normal, buy, second, booster];
 test("模式配额分别检查普通、零编号购买、第二购买与加注", () => {
-  assert.deepEqual(remainingModeActions(actions, {0: 99, 1: 10, 2: 9, 1001: 10}, 100, 10), [normal, second]);
+  assert.deepEqual(remainingModeActions(actions, {0: 99, 1: 10, 2: 9, 1001: 10}, 100, 10), [second, normal]);
   assert.deepEqual(remainingModeActions(actions, {0: 100, 1: 10, 2: 10, 1001: 9}, 100, 10), [booster]);
   assert.deepEqual(remainingModeActions(actions, {0: 100, 1: 10, 2: 10, 1001: 10}, 100, 10), []);
 });
 test("只补特殊模式不要求额外普通局，但不能漏掉零样本模式", () => {
   assert.deepEqual(remainingModeActions(actions, {1: 10}, 0, 10), [second, booster]);
+});
+
+test("购买和加注全部达标前不选择普通旋转", () => {
+  assert.deepEqual(remainingModeActions(actions, {}, 100_000, 10_000), [buy, second, booster, normal]);
+  assert.deepEqual(remainingModeActions([normal], {}, 100_000, 10_000), [normal]);
 });
 
 test("配额动作可按代码声明模式过滤官方隐藏入口", () => {

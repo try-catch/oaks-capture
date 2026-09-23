@@ -362,23 +362,26 @@ async function main(): Promise<void> {
       if (!claim.slug) throw new Error('无可诊断游戏');
       slug = claim.slug;
       installDurability();
-      // 仅固定官方公开入口；入口恢复后验证登录/start，不下注、不打印会话信息。
+      // 验证新测试站目录与 3 OAKS login/start；不下注、不打印会话信息。
       let launchReady = false;
-      for (const [stage, url] of [
-        ['home', 'https://3oaks.com/'],
-        ['catalog', 'https://3oaks.com/api/v1/games'],
-        ['launch', `https://3oaks.com/api/v1/games/${encodeURIComponent(slug)}/play?lang=en`],
-      ]) {
-        const response = await fetch(url);
+      for (const [stage, url, options] of [
+        ['home', 'https://www.wxgame99.com/', undefined],
+        ['catalog', 'https://www.wxgame99.com/api/game_list', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ appId: '1001', gameBrand: '3oaks', gameType: 'slot' }),
+        }],
+      ] as const) {
+        const response = await fetch(url, options);
         console.log(JSON.stringify({ phase: 'upstream-probe', stage, slug,
           status: response.status, html: response.headers.get('content-type')?.includes('text/html') === true,
           githubHosted: process.env.RUNNER_ENVIRONMENT === 'github-hosted' }));
         if (stage === 'catalog' && response.ok) {
           const data = await response.json() as any;
-          console.log(JSON.stringify({ phase: 'catalog-shape', itemCount: data.data?.items?.length ?? 0,
-            itemFields: Object.keys(data.data?.items?.[0] ?? {}).filter(key => /^[a-z_]+$/.test(key)) }));
+          const items = Array.isArray(data.data) ? data.data : [];
+          console.log(JSON.stringify({ phase: 'catalog-shape', itemCount: items.length,
+            itemFields: Object.keys(items[0] ?? {}).filter(key => /^[A-Za-z]+$/.test(key)) }));
+          launchReady = items.some((item: any) => item.gameId === slug);
         }
-        if (stage === 'launch') launchReady = response.ok;
       }
       if (launchReady) {
         const { readRegistry } = await import('../catalog-sync');

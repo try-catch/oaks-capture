@@ -17,6 +17,10 @@ export function featureTarget(feature: string, specialTarget = 10): number {
   return ["base-loss", "base-or-feature-win"].includes(feature) ? 1 : specialTarget;
 }
 
+export function requiredFeatures(features: string[], modeQuota = false): string[] {
+  return [...new Set(["base-loss", "base-or-feature-win", ...(modeQuota ? [] : features)])].sort();
+}
+
 export function remainingTargets(counts: Record<string, number>, required: string[], target = 10): Record<string, number> {
   return Object.fromEntries(required
     .filter((feature) => (counts[feature] ?? 0) < featureTarget(feature, target))

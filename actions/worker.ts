@@ -291,7 +291,7 @@ async function runThread(): Promise<void> {
         const args = ['-r', 'ts-node/register', script, '--game', slug, ...quotaArgs];
         if (script !== 'validate-data.ts') args.push('--target', 'test');
         const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'pipe', timeout: 900_000, env: process.env });
-        if (result.status !== 0) throw new Error('正式数据验收失败');
+        if (result.status !== 0) throw new Error(`${script} 正式数据验收失败`);
       }
       status = 'accepted';
     } catch (error) {

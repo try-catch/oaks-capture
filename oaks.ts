@@ -48,7 +48,7 @@ export function selectedModeTypes(expected: number[], requested: number[]): numb
 }
 
 // 官方会话被重开后，当前这一局已经无法完成，但游戏本身可以继续。
-const RECOVERABLE_ROUND_CODES = ["GAME_REOPENED", "GAME_CLOSED", "SESSION_EXPIRED", "SESSION_NOT_FOUND", "SERVER_ERROR", "FUNDS_EXCEED"];
+const RECOVERABLE_ROUND_CODES = ["GAME_REOPENED", "GAME_CLOSED", "SESSION_EXPIRED", "SESSION_NOT_FOUND", "SERVER_ERROR", "FUNDS_EXCEED", "INVALID_JSON"];
 
 // “这一局不能再用了”的原因：官方业务失败（含会话重开），
 // 或协调器判定上一轮结果未知而拒绝重放。两种情况都只需丢弃未完成帧并重新登录。

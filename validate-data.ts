@@ -3,7 +3,7 @@ import path from "node:path";
 import { readRegistry } from "./catalog-sync";
 import { selectGames } from "./src/cli";
 import { classifyRound } from "./src/features";
-import { featureTarget } from "./src/capture-checkpoint";
+import { featureTarget, requiredFeatures } from "./src/capture-checkpoint";
 import { sourceRoundHash } from "./src/mongo-store";
 import { roundSpinType } from "./src/protocol";
 import { validateGameRound } from "./src/validators";
@@ -83,11 +83,13 @@ async function main(): Promise<void> {
   const inventoryPath = path.join(__dirname, "output", game.slug, "feature-inventory.json");
   const inventory = await fs.readFile(inventoryPath, "utf8").then((content) => JSON.parse(content)).catch(() => undefined);
   const requestedRequired = arg("--require", "").split(",").map((value) => value.trim()).filter(Boolean);
-  const required = [...new Set(["base-loss", "base-or-feature-win", ...(requestedRequired.length ? requestedRequired : (inventory?.required ?? []))])].sort();
-  const targetPerFeature = Number(arg("--target-per-feature", "1"));
-  const missing = required.filter((feature) => (coverage[feature] ?? 0) < featureTarget(feature, targetPerFeature));
   const normalRounds = Number(arg("--normal-rounds", "0"));
   const targetPerMode = Number(arg("--target-per-mode", "0"));
+  const modeQuotaEnabled = normalRounds > 0 || targetPerMode > 0;
+  const required = requiredFeatures(requestedRequired.length ? requestedRequired : (inventory?.required ?? []),
+    modeQuotaEnabled && requestedRequired.length === 0);
+  const targetPerFeature = Number(arg("--target-per-feature", "1"));
+  const missing = required.filter((feature) => (coverage[feature] ?? 0) < featureTarget(feature, targetPerFeature));
   const modeQuota = auditModeQuota(game, lines.map((line) => {
     try { return JSON.parse(line); } catch { return {}; }
   }), normalRounds, targetPerMode);

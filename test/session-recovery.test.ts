@@ -30,6 +30,13 @@ test("OK 响应正常返回，不会被误判为失败", async () => {
   assert.deepEqual(result.context, {});
 });
 
+test("官方 200 非 JSON 响应按可恢复会话错误处理", async () => {
+  await assert.rejects(
+    () => withFetch("Get3OaksSpin temporary error", () => command("https://example.test/g", "", "play", {})),
+    (error: unknown) => error instanceof ProtocolStatusError && error.code === "INVALID_JSON" && recoverableRoundError(error),
+  );
+});
+
 test("会话重开与结果未知都只丢弃这一局，普通错误仍然直接抛出", () => {
   assert.equal(recoverableRoundError(new ProtocolStatusError("GAME_REOPENED", "play: reopened")), true);
   assert.equal(recoverableRoundError(new Error('play/spin: {"code":"GAME_REOPENED"}')), true);

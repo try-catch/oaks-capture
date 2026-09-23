@@ -4,6 +4,7 @@ import { roundSpinType } from "./protocol";
 import { MongoClient } from "mongodb";
 import { readRegistry } from "../catalog-sync";
 import { MONGO_COLLECTION, MONGO_URI } from "../config";
+import { requiredFeatures } from "./capture-checkpoint";
 import { numberOption, selectGames, stringOption } from "./cli";
 import { ensureMongoIndexes, sourceRoundHash, syncMongoRounds } from "./mongo-store";
 import { auditModeQuota } from "./mode-target";
@@ -23,10 +24,6 @@ async function readNDJSON(file: string): Promise<Record<string, unknown>[]> {
     try { return JSON.parse(line) as Record<string, unknown>; }
     catch (error) { throw new Error(`${file}:${index + 1} JSON 非法: ${(error as Error).message}`); }
   });
-}
-
-function requiredFeatures(inventory: { required?: string[] }): string[] {
-  return [...new Set(inventory.required ?? [])].sort();
 }
 
 export async function importMongo(args: string[]): Promise<Array<Record<string, unknown>>> {
@@ -62,6 +59,7 @@ export async function auditMongo(args: string[]): Promise<Array<Record<string, u
   const minimum = numberOption(args, "--target-per-feature", 10);
   const normalRounds = numberOption(args, "--normal-rounds", 0);
   const targetPerMode = numberOption(args, "--target-per-mode", 0);
+  const modeQuotaEnabled = normalRounds > 0 || targetPerMode > 0;
   const client = new MongoClient(mongoURI(target));
   const result: Array<Record<string, unknown>> = [];
   await client.connect();
@@ -72,7 +70,8 @@ export async function auditMongo(args: string[]): Promise<Array<Record<string, u
       const uniqueHash = indexes.some((index) => index.unique === true && index.key.sourceRoundHash === 1 && Object.keys(index.key).length === 1);
       const inventoryPath = path.join(__dirname, "..", "output", game.slug, "feature-inventory.json");
       const inventory = JSON.parse(await fs.readFile(inventoryPath, "utf8")) as { required?: string[] };
-      const featureCounts = Object.fromEntries(await Promise.all(requiredFeatures(inventory).map(async (feature) => [feature, await collection.countDocuments({ features: feature })])));
+      const featureCounts = Object.fromEntries(await Promise.all(requiredFeatures(inventory.required ?? [], modeQuotaEnabled)
+        .map(async (feature) => [feature, await collection.countDocuments({ features: feature })])));
       const missing = Object.entries(featureCounts).filter(([, count]) => Number(count) < minimum).map(([feature]) => feature);
       const documents = await collection.find({}).toArray();
       const source = await readNDJSON(path.join(__dirname, "..", "output", game.slug, `${game.slug}.ndjson`));

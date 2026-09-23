@@ -101,7 +101,9 @@ export async function fetchLaunchUrl(playUrl: string): Promise<string> {
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) throw new ProtocolHttpError(`LAUNCH_HTTP_${response.status}`, response.status, parseRetryAfter(response.headers.get("retry-after")));
-  const result = await response.json() as JSONMap;
+  let result: JSONMap;
+  try { result = JSON.parse(await response.text()) as JSONMap; }
+  catch { throw new ProtocolStatusError("INVALID_JSON", "新测试站响应不是 JSON"); }
   if (result.success !== true || typeof result.data !== "string") {
     const missing = String(result.error ?? result.message ?? "").includes("404");
     if (missing) throw new ProtocolHttpError("LAUNCH_HTTP_404", 404, 0);
@@ -161,7 +163,9 @@ export async function command(endpoint: string, cookie: string, name: string, ex
       parseRetryAfter(response.headers.get("retry-after")),
     );
   }
-  const result = await response.json() as JSONMap;
+  let result: JSONMap;
+  try { result = JSON.parse(await response.text()) as JSONMap; }
+  catch { throw new ProtocolStatusError("INVALID_JSON", `${name}: 官方响应不是 JSON`); }
   if (result.status?.code && result.status.code !== "OK") {
     throw new ProtocolStatusError(String(result.status.code), `${name}${extra.action?.name ? `/${extra.action.name}` : ""}: ${JSON.stringify(result.status)}`);
   }

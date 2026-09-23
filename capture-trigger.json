@@ -1,6 +1,6 @@
 {
   "purpose": "改动本文件并推送到 main 会触发一次真实采集运行；普通代码推送不会触发。",
-  "note": "启用链式续跑：finish 派发下一轮，替代不触发的 GitHub cron",
-  "requestedBy": "operator",
-  "requestedAt": "2026-09-12T18:30:34Z"
+  "note": "验证 wxgame99 新入口并启动一轮真实采集",
+  "requestedBy": "codex",
+  "requestedAt": "2026-09-23T05:55:00Z"
 }

@@ -372,6 +372,8 @@ async function main(): Promise<void> {
       if (!claim.slug) throw new Error('无可诊断游戏');
       slug = claim.slug;
       installDurability();
+      const { readRegistry } = await import('../catalog-sync');
+      const registry = await readRegistry();
       // 验证新测试站目录与 3 OAKS login/start；不下注、不打印会话信息。
       for (const [stage, url, options] of [
         ['home', 'https://www.wxgame99.com/', undefined],
@@ -389,11 +391,16 @@ async function main(): Promise<void> {
           const items = Array.isArray(data.data) ? data.data : [];
           console.log(JSON.stringify({ phase: 'catalog-shape', itemCount: items.length,
             responseFields: Object.keys(data), itemFields: Object.keys(items[0] ?? {}) }));
+          const ids = items.map((item: any) => item.gameId)
+            .filter((id: unknown): id is string => typeof id === 'string' && /^[a-z0-9_]+$/.test(id));
+          const listed = new Set(ids);
+          console.log(JSON.stringify({ phase: 'catalog-coverage', listedIds: listed.size,
+            sampleIds: ids.slice(0, 3), claimedListed: listed.has(slug),
+            missing: listed.size ? registry.games.filter(game => game.active && !listed.has(game.slug)).map(game => game.slug) : undefined }));
         }
       }
-      const { readRegistry } = await import('../catalog-sync');
       const { openSession, ProtocolHttpError, ProtocolStatusError } = await import('../src/protocol');
-      const game = (await readRegistry()).games.find(game => game.slug === slug);
+      const game = registry.games.find(game => game.slug === slug);
       if (!game?.discovery) throw new Error('缺少已核实定义');
       try { await openSession(game.discovery); }
       catch (error) {

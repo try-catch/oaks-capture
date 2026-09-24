@@ -373,7 +373,6 @@ async function main(): Promise<void> {
       slug = claim.slug;
       installDurability();
       // 验证新测试站目录与 3 OAKS login/start；不下注、不打印会话信息。
-      let launchReady = false;
       for (const [stage, url, options] of [
         ['home', 'https://www.wxgame99.com/', undefined],
         ['catalog', 'https://www.wxgame99.com/api/game_list', {
@@ -390,25 +389,21 @@ async function main(): Promise<void> {
           const items = Array.isArray(data.data) ? data.data : [];
           console.log(JSON.stringify({ phase: 'catalog-shape', itemCount: items.length,
             responseFields: Object.keys(data), itemFields: Object.keys(items[0] ?? {}) }));
-          launchReady = items.some((item: any) => item.gameId === slug);
         }
       }
-      if (launchReady) {
-        const { readRegistry } = await import('../catalog-sync');
-        const { openSession, ProtocolHttpError, ProtocolStatusError } = await import('../src/protocol');
-        const game = (await readRegistry()).games.find(game => game.slug === slug);
-        if (!game?.discovery) throw new Error('缺少已核实定义');
-        try { await openSession(game.discovery); }
-        catch (error) {
-          const code = error instanceof ProtocolStatusError && /^[A-Z_]{1,64}$/.test(error.code) ? error.code : 'SESSION_FAILED';
-          console.log(JSON.stringify({ phase: 'upstream-probe', stage: 'session-error', slug, code,
-            status: error instanceof ProtocolHttpError ? error.status : undefined }));
-          throw error;
-        }
-        console.log(JSON.stringify({ phase: 'upstream-probe', stage: 'session-ready', slug }));
-      } else {
-        process.exitCode = 1;
+      const { readRegistry } = await import('../catalog-sync');
+      const { openSession, ProtocolHttpError, ProtocolStatusError } = await import('../src/protocol');
+      const game = (await readRegistry()).games.find(game => game.slug === slug);
+      if (!game?.discovery) throw new Error('缺少已核实定义');
+      try { await openSession(game.discovery); }
+      catch (error) {
+        const code = error instanceof ProtocolStatusError && /^[A-Z_]{1,64}$/.test(error.code) ? error.code :
+          error instanceof ProtocolHttpError ? error.message : 'SESSION_FAILED';
+        console.log(JSON.stringify({ phase: 'upstream-probe', stage: 'session-error', slug, code,
+          status: error instanceof ProtocolHttpError ? error.status : undefined }));
+        throw error;
       }
+      console.log(JSON.stringify({ phase: 'upstream-probe', stage: 'session-ready', slug }));
       rpc('done', { status: 'paused', count: claim.baselineCount ?? 0 });
     } finally {
       try { if (owned) rpc('end'); } finally { channel.close(); }

@@ -46,6 +46,7 @@ READ_ONLY_OPS = {'status', 'load', 'load_chunk', 'pending', 'files', 'ack'}
 # 这些操作由游戏租约保证单写，可以用各自游戏的锁而不是全局锁（status 除外，它要读一致状态）。
 GAME_LOCAL_OPS = {'load', 'load_chunk', 'pending', 'files', 'ack'}
 RESTORE_CHUNK_BYTES = 512 * 1024
+TRANSIENT_RETRY_MS = 60_000
 
 
 def node_of(worker):
@@ -60,6 +61,12 @@ def has_special_modes(game):
 
 def claim_slug(key, claim):
     return str(claim.get('slug') or key.split('#', 1)[0])
+
+
+def reclaimable(claim, now):
+    status = claim.get('status')
+    return status in ('released', 'shard-complete', 'waiting') or (
+        status == 'retryable' and now >= float(claim.get('retryAt', 0)))
 
 
 def claim_backoff(state, worker):
@@ -478,7 +485,7 @@ class Store:
                         continue
                     if quota.get('specialComplete') or quota.get('unavailable'):
                         continue
-                    if primary and primary.get('status') not in ('released', 'shard-complete', 'waiting'):
+                    if primary and not reclaimable(primary, now):
                         continue
                     if primary and primary.get('status') == 'shard-complete' and secondary and secondary.get('status') == 'running':
                         continue
@@ -493,7 +500,7 @@ class Store:
                     continue
                 if primary.get('status') != 'running' or primary.get('node') == node:
                     continue
-                if secondary and secondary.get('status') not in ('released', 'shard-complete', 'waiting'):
+                if secondary and not reclaimable(secondary, now):
                     continue
                 return self.grant_claim(state, req, worker, node, slug, secondary_key, True, 2)
 
@@ -516,7 +523,7 @@ class Store:
                        and claim_slug(key, other) == slug for key, other in state['claims'].items()):
                     continue
                 # 熔断节点释放出的游戏立刻可以重新认领；分片完成后同一 key 转入普通模式。
-                if claim and claim.get('status') not in ('released', 'shard-complete', 'waiting'):
+                if claim and not reclaimable(claim, now):
                     continue
                 if self.accepted(slug):
                     state['claims'][slug] = {'slug': slug, 'status': 'already-accepted'}
@@ -664,6 +671,8 @@ class Store:
             claim['status'] = req['status']
             claim['count'] = req.get('count', 0)
             claim['reason'] = str(req.get('reason', ''))[:200]
+            if req['status'] == 'retryable':
+                claim['retryAt'] = now + TRANSIENT_RETRY_MS
             state['metrics']['documentsWritten'] += int(claim.get('documentsWritten', 0))
             if claim.get('specialOnly'):
                 quota = state.setdefault('modeQuotas', {}).setdefault(slug, {})

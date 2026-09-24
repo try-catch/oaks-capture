@@ -297,6 +297,7 @@ export function roundSpinType(frames: JSONMap[], fallback = 0): number {
       (providerMode === 0 || fallback === providerMode + 1)) return fallback;
   const detected = actionSpinType({ name, params });
   if (detected > 0) return detected;
+  if (name === "spin" && Number.isInteger(fallback) && fallback > BOOSTER_SPIN_TYPE_OFFSET) return fallback;
   if (name === "spin") return 0;
   return Number.isInteger(fallback) && fallback >= 0 ? fallback : 0;
 }

@@ -95,6 +95,21 @@ class RecoveryTests(unittest.TestCase):
                              'lines': [json.dumps(document)]}, check_legacy=False)
         self.assertEqual(self.call('status')['modeQuotas']['one']['counts']['1'], 4002)
 
+    def test_transient_failure_retries_after_cooldown(self):
+        atomic(self.root / 'games/registry.json', {'games': [
+            {'slug': 'one', 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}},
+        ]})
+        self.call('end')
+        self.call('begin', maxClaims=2, maxShards=2)
+        self.assertEqual(self.call('claim')['slug'], 'one')
+        self.call('done', status='retryable', count=0, reason='LAUNCH_HTTP_522')
+        self.assertIn('wait', self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False))
+        state = read(self.store.state_path)
+        state['claims']['one']['retryAt'] = 0
+        atomic(self.store.state_path, state)
+        retried = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)
+        self.assertEqual((retried['slug'], retried['specialOnly']), ('one', True))
+
     def test_ack_after_durable_append_and_restore(self):
         self.call('pending', value={'id': 'round', 'frames': [{'frame': 1}]})
         document = {'game': 'one', 'sourceRoundHash': 'a' * 64, 'data': [1]}

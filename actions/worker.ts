@@ -312,7 +312,7 @@ async function runThread(): Promise<void> {
       else if (message === 'ACTIONS_BUDGET') { status = 'paused'; stopping = true; }
       else if (/租约不属于当前节点/.test(message)) { status = 'released'; stopping = true; }
       else if (gameRegistrationUnavailable(error)) status = 'unavailable';
-      else if (recoverableRoundError(error)) status = 'failed';
+      else if (recoverableRoundError(error)) status = 'retryable';
       else if (!message.includes('达到本轮上限')) { status = 'failed'; stopping = true; process.exitCode = 1; }
     } finally {
       console.log = originalLog;

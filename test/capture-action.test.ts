@@ -33,6 +33,7 @@ test("购买模式和 booster 使用互不冲突的 spinType", () => {
   assert.equal(actionSpinType(actions[1]), 1);
   assert.equal(actionSpinType({ name: "spin", params: { ante_bet: 1.25, selected_mode: 1 } }), BOOSTER_SPIN_TYPE_OFFSET + 1);
   assert.equal(roundSpinType([{ context: { last_action: "spin", last_args: { ante_bet: 4, selected_mode: 2 } } }], 0), BOOSTER_SPIN_TYPE_OFFSET + 2);
+  assert.equal(roundSpinType([{ context: { last_action: "spin", last_args: {} } }], BOOSTER_SPIN_TYPE_OFFSET + 1), BOOSTER_SPIN_TYPE_OFFSET + 1);
   assert.equal(roundSpinType([{ context: { last_action: "buy_spin", last_args: { selected_mode: 3 } } }], 1), 3);
   const zeroBased: PlayAction = {
     name: "buy_spin", params: { bet_per_line: 10, lines: 5, selected_mode: 0 }, spinType: 1,

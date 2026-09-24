@@ -52,7 +52,7 @@ test("会话重开与结果未知都只丢弃这一局，普通错误仍然直�
 });
 
 test("临时上游故障只释放当前游戏，worker 继续补满并发槽位", () => {
-  assert.match(worker, /else if \(recoverableRoundError\(error\)\) status = 'failed';/);
+  assert.match(worker, /else if \(recoverableRoundError\(error\)\) status = 'retryable';/);
   assert.doesNotMatch(worker, /recoverableRoundError\(error\)\)[^{\n]*\{[^}]*stopping = true/);
 });
 

@@ -38,13 +38,18 @@ test('只跳过当前不可注册游戏，账号和节点封控不能被降级�
 test('新测试站生成启动地址并拒绝非预期域名', async () => {
   const original = globalThis.fetch;
   try {
+    const launchTokens: string[] = [];
     globalThis.fetch = async (_input, options) => {
       const body = JSON.parse(String(options?.body));
       assert.equal(body.gameId, 'sun_of_egypt');
       assert.equal(body.gameBrand, '3oaks');
+      launchTokens.push(body.token);
       return Response.json({ success: true, data: 'https://3oaks.ssgfivegame.com/api/v1/games/sun_of_egypt/play?token=secret' });
     };
     assert.match(await fetchLaunchUrl('https://3oaks.com/api/v1/games/sun_of_egypt/play?lang=en'), /ssgfivegame\.com/);
+    assert.match(await fetchLaunchUrl('https://3oaks.com/api/v1/games/sun_of_egypt/play?lang=en'), /ssgfivegame\.com/);
+    assert.match(launchTokens[0], /^1001_[a-f0-9]{32}$/);
+    assert.notEqual(launchTokens[0], launchTokens[1], '不同 worker/重登录必须申请不同试玩用户 token');
     globalThis.fetch = async () => Response.json({ success: true, data: 'https://evil.example/api/v1/games/sun_of_egypt/play?token=secret' });
     await assert.rejects(fetchLaunchUrl('https://3oaks.com/api/v1/games/sun_of_egypt/play?lang=en'), /非预期/);
   } finally { globalThis.fetch = original; }

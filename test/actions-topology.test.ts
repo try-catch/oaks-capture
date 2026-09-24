@@ -26,8 +26,9 @@ test("CAPTURE_ENABLED 是硬门禁，且推送触发只认专用文件", () => {
 test("单个节点按线程数并发，节点数与矩阵一致", () => {
   assert.match(workflow, /OAKS_THREADS:\s*'8'/);
   assert.match(workflow, /OAKS_NODES:\s*'20'/);
-  // 恢复此前已稳定运行的单会话 1 秒节奏。
-  assert.match(workflow, /OAKS_SPIN_DELAY_MS:\s*'1000'/);
+  // 在 24 会话硬上限内减少固定空等；429 仍由 CaptureThrottle 切回保守节奏。
+  assert.match(workflow, /OAKS_SPIN_DELAY_MS:\s*'500'/);
+  assert.match(workflow, /OAKS_NODE_SPACING_MS:\s*'200'/);
   assert.match(workflow, /max-parallel:\s*20/);
   const matrix = workflow.match(/worker:\s*\[([^\]]+)\]/)?.[1] ?? "";
   assert.equal(matrix.split(",").length, 20);

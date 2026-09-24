@@ -47,6 +47,8 @@ env:
   # 24 是历史压测的吞吐最优点；60 个会话会让共享测试服连续触发 CPU PSI 保护停轮。
   # 每节点仍只按预算启动 2 个 worker，全局活跃游戏硬限制为 24。
   OAKS_MAX_CLAIMS: '24'
+  # 购买/加注缺口由两个不同 Runner 节点分片；总会话数仍固定为 24。
+  OAKS_SHARDS_PER_GAME: '2'
   # 常驻长连接：单次协调往返从 1-2 秒降到毫秒级。1 启用，0 关闭。
   OAKS_PERSISTENT_CHANNEL: '1'
 

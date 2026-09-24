@@ -9,7 +9,7 @@
 1. 官方请求只能由 GitHub-hosted Linux Runner 发出。不得在本机或测试服直接采集，不得使用代理、指定地区、轮换账号或主动轮换出口。
 2. 允许的动作只有：查询 GitHub Actions、仓库变量、测试服协调器/MongoDB 完成量；在门禁要求时单独补一个缺失索引；满足条件时派发一次现有 `capture.yml`；**以及在下文"运行期健康介入"判定失守时取消在途运行**。除这一项保护性取消外，不得取消、重跑或删除 GitHub 运行，不得修改代码。
 3. 公开仓库 `main` 必须包含当前修复基线。在人工压测完成前保持 `CAPTURE_ENABLED=false`；收到恢复指令后才设为 `true`，同时保持 `BENCHMARK_ENABLED=false`。正式 workflow 固定最多 24 个活跃游戏/Mongo 写入者：`OAKS_MAX_CLAIMS` 是字面量 `'24'`，不得被派发参数放大，不得派发 benchmark。单会话间隔 500ms，单节点请求间隔 200ms；429 仍必须按官方 `Retry-After` 退避，不能继续降低间隔。
-4. 每节点 worker 子进程数由 `activeThreads()` 收敛为 `min(OAKS_THREADS, ceil(maxClaims / nodes))`：20 节点 × 24 会话时每节点 fork 2 个子进程，竞争全局 24 个游戏租约。不得绕过它直接使用授权线程数，避免回到旧版 20×8=160 条控制通道。
+4. 每节点 worker 子进程数由 `activeThreads()` 收敛为 `min(OAKS_THREADS, ceil(maxClaims / nodes))`：20 节点 × 24 会话时每节点 fork 2 个子进程，竞争全局 24 个游戏租约。购买/加注游戏最多两个不同 Runner 节点分片，`OAKS_SHARDS_PER_GAME` 固定为 `'2'`，协调器原子分配剩余配额；总会话数仍不得超过 24。不得绕过它直接使用授权线程数，避免回到旧版 20×8=160 条控制通道。
 5. 满额 claim 由协调器指数退避（`CLAIM_WAIT_BASE_MS` 1500ms 起，上限 `CLAIM_WAIT_MAX_MS` 30s），客户端原样遵守。不得改回固定 3 秒轮询：那会让未拿到租约的节点形成控制面风暴，在已过载的测试服上叠加约 5 次/秒的空转 claim 与 SSH 往返。
 6. `PLAYER_LOCKOUT` 且消息声明 jurisdiction/legal reasons 时属于该 GitHub Runner 的地区限制。记录 Runner 和游戏并停止该节点，其他节点继续；后续轮次仍可接受 GitHub 正常随机分配的新 Runner，但不得使用代理、指定地区、轮换账号或主动轮换出口。单轮受影响节点少于 10/20 时不构成全局停采条件，达到或超过一半才停止整轮并通知用户。
 7. HTTP 429 必须遵守 `Retry-After`。两个及以上节点同时限速时让协调器全局暂停；单节点达到熔断条件时保留数据、交回租约，不得绕过冷却。

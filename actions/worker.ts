@@ -18,6 +18,8 @@ let pending: PendingRound | undefined;
 let requestKey: string | undefined;
 let deadline = 0;
 let stopping = false;
+let specialOnly = false;
+let shardIndex = 0;
 let egress = process.env.OAKS_EGRESS ?? '';
 const documentBatch: string[] = [];
 const localResponses = new Map<string, { body: Buffer; status: number; headers: Record<string, string> }>();
@@ -163,6 +165,7 @@ function installDurability(): void {
     },
     noteMongo: ms => { timing.mongo += ms; },
     sessionReady: game => realLog(JSON.stringify({ worker, slug: game, phase: 'session-ready' })),
+    reserveModeTargets: (counts, targets) => rpc('reserve_modes', { counts, targets }).targets,
     syncFiles,
     shouldStop: stopped,
   });
@@ -257,6 +260,8 @@ async function runThread(): Promise<void> {
     }
     slug = claimed.slug;
     deadline = claimed.deadline;
+    specialOnly = claimed.specialOnly === true;
+    shardIndex = Number(claimed.shardIndex ?? 0);
     const directory = path.join(root, 'output', slug);
     const game = registry.games.find(game => game.slug === slug);
     try {
@@ -284,16 +289,20 @@ async function runThread(): Promise<void> {
     const originalWarn = console.warn;
     console.log = console.warn = () => {};
     try {
-      await captureGame(game!);
+      await captureGame(game!, undefined, { partialModeQuota: specialOnly, skipMongoSync: shardIndex > 1 });
       console.log = originalLog;
       console.warn = originalWarn;
-      for (const script of ['validate-data.ts', 'audit-mongo.ts', 'finalize-data.ts']) {
-        const args = ['-r', 'ts-node/register', script, '--game', slug, ...quotaArgs];
-        if (script !== 'validate-data.ts') args.push('--target', 'test');
-        const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'pipe', timeout: 900_000, env: process.env });
-        if (result.status !== 0) throw new Error(`${script} 正式数据验收失败`);
+      if (specialOnly) {
+        status = 'shard-complete';
+      } else {
+        for (const script of ['validate-data.ts', 'audit-mongo.ts', 'finalize-data.ts']) {
+          const args = ['-r', 'ts-node/register', script, '--game', slug, ...quotaArgs];
+          if (script !== 'validate-data.ts') args.push('--target', 'test');
+          const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'pipe', timeout: 900_000, env: process.env });
+          if (result.status !== 0) throw new Error(`${script} 正式数据验收失败`);
+        }
+        status = 'accepted';
       }
-      status = 'accepted';
     } catch (error) {
       const message = (error as Error).message;
       reason = reasonOf(error);
@@ -422,6 +431,7 @@ async function main(): Promise<void> {
       maxInFlight: threads * nodes,
       // 同时活跃的官方游戏会话数必须限制：demo 后端在大量并发会话时返回 GAME_REOPENED。
       maxClaims: numberFromEnv('OAKS_MAX_CLAIMS', 24),
+        maxShards: numberFromEnv('OAKS_SHARDS_PER_GAME', 2),
         deadlineMinutes: numberFromEnv('OAKS_DEADLINE_MINUTES', 40),
       })));
     } finally { channel.close(); }
@@ -434,10 +444,11 @@ async function main(): Promise<void> {
     try {
       const status = rpc('status');
       if (status.restoreChunkBytes !== 512 * 1024) throw new Error('协调器尚未支持分块恢复，禁止启动新采集');
-    if (!process.env.OAKS_MONGO_URI) throw new Error('缺少受控 Mongo 连接');
-    const { MongoClient } = await import('mongodb');
-    const client = new MongoClient(process.env.OAKS_MONGO_URI, { serverSelectionTimeoutMS: 10_000 });
-    try { await client.connect(); await client.db('admin').command({ ping: 1 }); }
+      if (status.maxModeShards !== 2) throw new Error('协调器尚未支持双节点模式分片，禁止启动新采集');
+      if (!process.env.OAKS_MONGO_URI) throw new Error('缺少受控 Mongo 连接');
+      const { MongoClient } = await import('mongodb');
+      const client = new MongoClient(process.env.OAKS_MONGO_URI, { serverSelectionTimeoutMS: 10_000 });
+      try { await client.connect(); await client.db('admin').command({ ping: 1 }); }
       finally { await client.close(); }
       console.log('SSH 主机身份、协调器与 Mongo 隧道检查通过；未请求官方接口。');
     } finally { channel.close(); }

@@ -29,6 +29,7 @@ test("单个节点按线程数并发，节点数与矩阵一致", () => {
   // 在 24 会话硬上限内减少固定空等；429 仍由 CaptureThrottle 切回保守节奏。
   assert.match(workflow, /OAKS_SPIN_DELAY_MS:\s*'500'/);
   assert.match(workflow, /OAKS_NODE_SPACING_MS:\s*'200'/);
+  assert.match(workflow, /OAKS_SHARDS_PER_GAME:\s*'2'/);
   assert.match(workflow, /max-parallel:\s*20/);
   const matrix = workflow.match(/worker:\s*\[([^\]]+)\]/)?.[1] ?? "";
   assert.equal(matrix.split(",").length, 20);
@@ -56,6 +57,7 @@ test("同时活跃的官方会话数受限，不能等于线程总数", () => {
   assert.ok(Number(configured![1]) < 8 * 20, '会话数不应等于线程总数');
   assert.match(worker, /maxClaims: numberFromEnv\('OAKS_MAX_CLAIMS', 24\)/);
   assert.doesNotMatch(worker, /maxClaims: threads \* nodes/);
+  assert.match(worker, /maxShards: numberFromEnv\('OAKS_SHARDS_PER_GAME', 2\)/);
 });
 
 test("begin 把线程与节点拓扑交给协调器作为并发预算", () => {

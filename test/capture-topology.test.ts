@@ -48,7 +48,7 @@ test("满额 claim 必须指数退避且客户端原样遵守", () => {
   // 满额分支必须走退避，不能回到固定 3000 毫秒的轮询。
   assert.doesNotMatch(coordinator, /'wait': 3000/);
   // 全局满额与单节点满额两条分支都要退避。
-  assert.equal((coordinator.match(/'wait': claim_backoff\(state, worker\)/g) ?? []).length, 2);
+  assert.ok((coordinator.match(/'wait': claim_backoff\(state, worker\)/g) ?? []).length >= 2);
   assert.match(coordinator, /clear_claim_backoff\(state, worker\)/);
   // 客户端必须按协调器下发的退避等待，不能再夹到 5 秒。
   assert.match(worker, /Math\.min\(30_000, wait\)/);

@@ -241,15 +241,27 @@ function actionCostMultiplier(action: PlayAction, shop: ShopInventory): number {
 }
 
 // 配额依据冻结的模式列表计算，重新登录不能让尚未完成的购买模式消失。
-export function remainingModeActions(actions: PlayAction[], counts: Record<number, number>, normal: number, special: number): PlayAction[] {
+export function remainingModeActions(
+  actions: PlayAction[], counts: Record<number, number>, normal: number, special: number,
+  targets: Record<number, number> = {},
+): PlayAction[] {
   return actions
-    .filter(action => (counts[actionSpinType(action)] ?? 0) < (actionSpinType(action) === 0 ? normal : special))
+    .filter(action => {
+      const type = actionSpinType(action);
+      return (counts[type] ?? 0) < (targets[type] ?? (type === 0 ? normal : special));
+    })
     .sort((left, right) => Number(actionSpinType(left) === 0) - Number(actionSpinType(right) === 0));
+}
+
+export interface CaptureGameOptions {
+  partialModeQuota?: boolean;
+  skipMongoSync?: boolean;
 }
 
 export async function captureGame(
   game: RegistryGame,
   throttle = new CaptureThrottle({ spinDelayMs: SPIN_DELAY_MS, fallbackSpinDelayMs: FALLBACK_SPIN_DELAY_MS }),
+  options: CaptureGameOptions = {},
 ): Promise<void> {
   if (captureRuntime && !game.discovery) throw new Error("Actions 采集缺少已核实的官方能力定义");
   const definition = game.discovery ?? await discoverGame(game.slug);
@@ -295,7 +307,7 @@ export async function captureGame(
     await mongo.connect();
     collection = mongo.db(database).collection(MONGO_COLLECTION);
     await ensureMongoIndexes(collection);
-    const repaired = await syncMongoRounds(collection, priorDocuments);
+    const repaired = options.skipMongoSync ? 0 : await syncMongoRounds(collection, priorDocuments);
     console.log(`[Mongo] 已连接 ${database}.${MONGO_COLLECTION}${repaired ? `，批量修复 ${repaired} 条历史数据` : "，历史数量一致无需重写"}`);
   } catch (error) {
     if (captureRuntime) throw new Error("测试服 Mongo 连接或去重同步失败，禁止发出官方请求");
@@ -324,6 +336,7 @@ export async function captureGame(
   let attemptedAction: PlayAction | undefined;
   const omitBuyFactor = new Set<number>();
   const stringBuyMode = new Set<number>();
+  let modeTargets: Record<number, number> = {};
 
   let quotaActions = buildPlayableActions(session.start, discoverShop(session.start), definition.clientFamily);
   if (modeQuota) {
@@ -332,8 +345,10 @@ export async function captureGame(
     const expected = selectedModeTypes([0, ...buys, ...Object.keys(declared.boosterPrices ?? {}).map(mode => 1000 + Number(mode))], explicitModeTypes);
     if (expected.some(type => !quotaActions.some(action => actionSpinType(action) === type))) throw new Error("官方会话未提供代码声明的全部模式，禁止把缺失模式标记达标");
     quotaActions = quotaActions.filter(action => expected.includes(actionSpinType(action)));
+    modeTargets = Object.fromEntries(expected.map(type => [type, type === 0 ? normalRounds : targetPerMode]));
+    if (captureRuntime?.reserveModeTargets) modeTargets = captureRuntime.reserveModeTargets(modeCounts, modeTargets);
   }
-  const remainingModes = (): PlayAction[] => remainingModeActions(quotaActions, modeCounts, normalRounds, targetPerMode);
+  const remainingModes = (): PlayAction[] => remainingModeActions(quotaActions, modeCounts, normalRounds, targetPerMode, modeTargets);
   const isComplete = (): boolean => modeQuota ? remainingModes().length === 0 : coverageComplete(required, counts, targetPerFeature);
   while ((captureRuntime?.pending() || !isComplete()) && attempted < maxNewRounds) {
     if (captureRuntime?.shouldStop()) throw new Error("ACTIONS_BUDGET");
@@ -453,7 +468,7 @@ export async function captureGame(
     }
   }
 
-  const complete = isComplete();
+  const localComplete = isComplete();
   await writeCheckpoint(checkpointPath, {
     brand: "3 OAKS",
     slug: game.slug,
@@ -477,10 +492,11 @@ export async function captureGame(
     branchRemaining: remainingTargets(counts, required, targetPerFeature),
     spinDelayMs: throttle.spinDelayMs,
     rateLimitEvents: throttle.events,
-    complete,
+    complete: options.partialModeQuota ? false : localComplete,
+    partialModeQuota: options.partialModeQuota === true,
   };
   await fs.writeFile(path.join(outputDir, isDefaultOutput ? (modeQuota ? "mode-coverage.json" : "coverage.json") : `${outputBase}-${modeQuota ? "mode-" : ""}coverage.json`), `${JSON.stringify(report, null, 2)}\n`);
-  if (!complete) throw new Error(`${game.slug} 达到本轮上限 ${maxNewRounds}，采集目标尚未完成`);
+  if (!localComplete) throw new Error(`${game.slug} 达到本轮上限 ${maxNewRounds}，采集目标尚未完成`);
   console.log(`3 OAKS ${game.slug} 采集完成：${captured} 局，${modeQuota ? "模式数量达标" : `全部分支 >= ${targetPerFeature}`}`);
   } finally {
     try { await flushMongoBatch(); }

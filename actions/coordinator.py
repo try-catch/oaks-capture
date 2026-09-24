@@ -42,15 +42,24 @@ THREAD_ID = re.compile(r'([0-9]+)\.([0-9]+)')
 # 旧采集容器检查的缓存时长：不必每个官方请求都跑一次 docker inspect。
 LEGACY_CHECK_TTL_MS = 300_000
 # 这些操作不改队列状态，跳过状态回写。
-READ_ONLY_OPS = {'status', 'load', 'load_chunk', 'pending', 'files', 'append', 'append_batch', 'ack'}
+READ_ONLY_OPS = {'status', 'load', 'load_chunk', 'pending', 'files', 'ack'}
 # 这些操作由游戏租约保证单写，可以用各自游戏的锁而不是全局锁（status 除外，它要读一致状态）。
-GAME_LOCAL_OPS = {'load', 'load_chunk', 'pending', 'files', 'append', 'append_batch', 'ack'}
+GAME_LOCAL_OPS = {'load', 'load_chunk', 'pending', 'files', 'ack'}
 RESTORE_CHUNK_BYTES = 512 * 1024
 
 
 def node_of(worker):
     match = THREAD_ID.fullmatch(worker)
     return match.group(1) if match else worker
+
+
+def has_special_modes(game):
+    settings = (game.get('discovery') or {}).get('settings') or {}
+    return bool(settings.get('buyModes') or settings.get('buyBonusPrices') or settings.get('boosterPrices'))
+
+
+def claim_slug(key, claim):
+    return str(claim.get('slug') or key.split('#', 1)[0])
 
 
 def claim_backoff(state, worker):
@@ -313,8 +322,44 @@ class Store:
         """
         for claim in state.get('claims', {}).values():
             if claim.get('status') == 'running' and node_of(str(claim.get('worker', ''))) == node:
+                self.release_mode_reservation(state, str(claim.get('worker', '')), claim.get('slug', ''))
                 claim['status'] = 'released'
                 claim['worker'] = ''
+
+    @staticmethod
+    def worker_claim(state, worker, slug):
+        for key, claim in state.get('claims', {}).items():
+            if claim.get('worker') == worker and claim_slug(key, claim) == slug:
+                return key, claim
+        return None, None
+
+    @staticmethod
+    def release_mode_reservation(state, worker, slug):
+        quota = state.get('modeQuotas', {}).get(slug, {})
+        quota.get('reservations', {}).pop(worker, None)
+
+    def grant_claim(self, state, req, worker, node, slug, key, special_only, shard_index):
+        folder = self.root / 'output' / slug
+        private = self.directory / slug
+        private.mkdir(parents=True, exist_ok=True, mode=0o700)
+        baseline = len(self.hashes(folder, private, slug))
+        state['claims'][key] = {
+            'slug': slug, 'worker': worker, 'status': 'running', 'node': node,
+            'runner': req.get('runner', {}), 'baselineCount': baseline,
+            'documentsWritten': 0, 'specialOnly': special_only, 'shardIndex': shard_index,
+        }
+        state['cursor'] = state['games'][(state['games'].index(slug) + 1) % len(state['games'])]
+        clear_claim_backoff(state, worker)
+        return {'slug': slug, 'deadline': state['deadline'], 'specialOnly': special_only, 'shardIndex': shard_index}
+
+    def accepted(self, slug):
+        folder = self.root / 'output' / slug
+        manifest = read(folder / 'data-manifest.json', {})
+        audit = read(folder / 'mongo-audit-test.json', {})
+        validation = read(folder / 'validation-report.json', {})
+        return (manifest.get('complete') is True and audit.get('valid') is True
+                and validation.get('invalid') == 0 and not validation.get('missing', ['unknown'])
+                and current_quota_complete(manifest, audit))
 
     def execute(self, state, req, check_legacy):
         op = req['op']
@@ -332,11 +377,14 @@ class Store:
                                      'http429': 0, 'businessErrors': {}})
         # begin 总会重写 topology；这里给旧状态一个保守占位，避免升级期间放大并发。
         state.setdefault('topology', {'nodeMs': DEFAULT_NODE_SPACING_MS, 'throttleLimit': DEFAULT_THROTTLE_LIMIT,
-                                      'maxInFlight': 1, 'maxClaims': 6})
+                                      'maxInFlight': 1, 'maxClaims': 6, 'maxShards': 1})
+        state['topology'].setdefault('maxShards', 1)
         if op == 'status':
             return {key: state.get(key) for key in ('owner', 'until', 'next', 'claims', 'deadline', 'halted', 'topology', 'metrics', 'serverHealth', 'serverHalt')} | {
                 'permits': len(state['permits']), 'nodeUntil': state['nodeUntil'],
                 'restoreChunkBytes': RESTORE_CHUNK_BYTES,
+                'maxModeShards': 2,
+                'modeQuotas': state.get('modeQuotas', {}),
                 # 退避汇总用于确认控制面没有重新退化成满额空转轮询。
                 'claimBackoff': {'workers': len(state['claimWaits']),
                                  'maxTries': max(state['claimWaits'].values(), default=0)}}
@@ -357,7 +405,9 @@ class Store:
             # 只继承交接时记录的冷却截止时间，不再强制放慢此后的节点间隔。
             state['until'] = max(state['until'], until)
             registry = read(self.root / 'games' / 'registry.json')
-            games = [game['slug'] for game in registry['games'] if game.get('active', True)]
+            active_games = [game for game in registry['games'] if game.get('active', True)]
+            games = [game['slug'] for game in active_games]
+            mode_games = [game['slug'] for game in active_games if has_special_modes(game)]
             cursor = state.get('cursor', handoff.get('slug'))
             if cursor in games:
                 at = games.index(cursor)
@@ -370,12 +420,14 @@ class Store:
                 'nodeMs': positive_int(req.get('nodeMs'), DEFAULT_NODE_SPACING_MS),
                 'throttleLimit': positive_int(req.get('throttleLimit'), DEFAULT_THROTTLE_LIMIT),
                 'maxInFlight': positive_int(req.get('maxInFlight'), threads * nodes),
-                # 非 workflow 调用仍保留保守回退；正式 workflow 会显式传入 60。
+                # 非 workflow 调用仍保留保守回退；正式 workflow 会显式传入 24。
                 'maxClaims': positive_int(req.get('maxClaims'), 6),
+                'maxShards': min(2, positive_int(req.get('maxShards'), 2)),
                 'deadline': now + positive_int(req.get('deadlineMinutes'), 40) * 60_000,
             }
             metrics = {'startedAt': now, 'documentsWritten': 0, 'responses': 0, 'http429': 0, 'businessErrors': {}}
-            state.update(owner=run, deadline=topology['deadline'], claims={}, games=games, waiters=[],
+            state.update(owner=run, deadline=topology['deadline'], claims={}, games=games, modeGames=mode_games,
+                         modeQuotas={}, waiters=[],
                          permits={}, nodeUntil={}, nodeThrottle={}, halted={}, rateNodes=[], topology=topology,
                          metrics=metrics, claimWaits={}, serverHalt=None)
             return {'deadline': state['deadline'], 'until': state['until'], 'games': len(games), 'topology': topology}
@@ -398,41 +450,126 @@ class Store:
             if now >= state['deadline'] or state['until'] >= state['deadline']:                return {'stop': True, 'until': state['until']}
             if now < state['until']:
                 return {'wait': min(30_000, state['until'] - now), 'deadline': state['deadline']}
-            if sum(claim.get('status') == 'running' for claim in state['claims'].values()) >= state['topology']['maxClaims']:
+            running = [claim for claim in state['claims'].values() if claim.get('status') == 'running']
+            if len(running) >= state['topology']['maxClaims']:
                 return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
             # 把会话均匀铺到 Runner 出口，避免先启动的单个节点抢走 8 个游戏，
             # 导致其它 19 个节点空等且所有请求挤在同一节点间隔里。
             per_node = max(1, (state['topology']['maxClaims'] + state['topology']['nodes'] - 1) // state['topology']['nodes'])
-            if sum(claim.get('status') == 'running' and claim.get('node') == node for claim in state['claims'].values()) >= per_node:
+            if sum(claim.get('node') == node for claim in running) >= per_node:
                 return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
+
+            # 先让一半全局会话各占一款购买/加注游戏，再把另一半配成不同节点的第二分片。
+            # 总会话仍受 maxClaims 限制，不增加服务商并发，只把容量从普通旋转转给模式缺口。
+            mode_games = state.get('modeGames', [])
+            primary_limit = max(1, (state['topology']['maxClaims'] + state['topology']['maxShards'] - 1)
+                                // state['topology']['maxShards'])
+            active_primaries = sum(1 for claim in state['claims'].values()
+                                   if claim.get('status') == 'running' and claim.get('specialOnly')
+                                   and int(claim.get('shardIndex', 0)) == 1)
+            if active_primaries < primary_limit:
+                for slug in mode_games:
+                    quota = state.get('modeQuotas', {}).get(slug, {})
+                    primary = state['claims'].get(slug)
+                    secondary = state['claims'].get(slug + '#2')
+                    if self.accepted(slug):
+                        state['claims'][slug] = {'slug': slug, 'status': 'already-accepted'}
+                        state.setdefault('modeQuotas', {})[slug] = {'specialComplete': True, 'accepted': True}
+                        continue
+                    if quota.get('specialComplete') or quota.get('unavailable'):
+                        continue
+                    if primary and primary.get('status') not in ('released', 'shard-complete', 'waiting'):
+                        continue
+                    if primary and primary.get('status') == 'shard-complete' and secondary and secondary.get('status') == 'running':
+                        continue
+                    return self.grant_claim(state, req, worker, node, slug, slug, True, 1)
+
+            for slug in mode_games:
+                quota = state.get('modeQuotas', {}).get(slug, {})
+                primary = state['claims'].get(slug)
+                secondary_key = slug + '#2'
+                secondary = state['claims'].get(secondary_key)
+                if quota.get('specialComplete') or quota.get('unavailable') or not primary:
+                    continue
+                if primary.get('status') != 'running' or primary.get('node') == node:
+                    continue
+                if secondary and secondary.get('status') not in ('released', 'shard-complete', 'waiting'):
+                    continue
+                return self.grant_claim(state, req, worker, node, slug, secondary_key, True, 2)
+
+            # 所有可用购买/加注游戏都已分片或已结束时，才恢复单节点普通模式采集。
+            unresolved_modes = any(
+                not state.get('modeQuotas', {}).get(slug, {}).get('specialComplete')
+                and not state.get('modeQuotas', {}).get(slug, {}).get('unavailable')
+                and not any(claim_slug(key, claim) == slug and claim.get('status') in ('failed', 'unavailable')
+                            for key, claim in state['claims'].items())
+                for slug in mode_games
+            )
+            if unresolved_modes:
+                return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
+
             for slug in state['games']:
                 claim = state['claims'].get(slug)
-                # 熔断节点释放出的游戏立刻可以重新认领；其余已认领游戏在本轮内不重复认领。
-                if slug in state['claims'] and claim.get('status') != 'released':
+                if slug in mode_games and not state.get('modeQuotas', {}).get(slug, {}).get('specialComplete'):
                     continue
-                folder = self.root / 'output' / slug
-                manifest = read(folder / 'data-manifest.json', {})
-                audit = read(folder / 'mongo-audit-test.json', {})
-                validation = read(folder / 'validation-report.json', {})
-                if manifest.get('complete') is True and audit.get('valid') is True and validation.get('invalid') == 0 and not validation.get('missing', ['unknown']) and current_quota_complete(manifest, audit):
-                    state['claims'][slug] = {'status': 'already-accepted'}
+                if any(other.get('status') == 'running' and other.get('specialOnly')
+                       and claim_slug(key, other) == slug for key, other in state['claims'].items()):
                     continue
-                private = self.directory / slug
-                private.mkdir(parents=True, exist_ok=True, mode=0o700)
-                baseline = len(self.hashes(folder, private, slug))
-                state['claims'][slug] = {'worker': worker, 'status': 'running', 'node': node,
-                                         'runner': req.get('runner', {}), 'baselineCount': baseline}
-                state['cursor'] = state['games'][(state['games'].index(slug) + 1) % len(state['games'])]
-                clear_claim_backoff(state, worker)
-                return {'slug': slug, 'deadline': state['deadline']}
+                # 熔断节点释放出的游戏立刻可以重新认领；分片完成后同一 key 转入普通模式。
+                if claim and claim.get('status') not in ('released', 'shard-complete', 'waiting'):
+                    continue
+                if self.accepted(slug):
+                    state['claims'][slug] = {'slug': slug, 'status': 'already-accepted'}
+                    continue
+                return self.grant_claim(state, req, worker, node, slug, slug, False, 0)
+            if any(claim.get('status') == 'running' for claim in state['claims'].values()):
+                return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
             return {'stop': True}
         slug = str(req.get('slug', ''))
-        if not re.fullmatch(r'[a-z0-9_]+', slug) or state.get('claims', {}).get(slug, {}).get('worker') != worker:
+        claim_key, claim = self.worker_claim(state, worker, slug)
+        if not re.fullmatch(r'[a-z0-9_]+', slug) or claim is None:
             raise ValueError('游戏租约不属于当前节点')
         folder = self.root / 'output' / slug
         private = self.directory / slug
         folder.mkdir(parents=True, exist_ok=True)
         private.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if op == 'reserve_modes':
+            if not claim.get('specialOnly'):
+                return {'targets': req.get('targets', {})}
+            try:
+                counts = {str(int(mode)): max(0, int(value)) for mode, value in req.get('counts', {}).items()}
+                targets = {str(int(mode)): max(0, int(value)) for mode, value in req.get('targets', {}).items()}
+            except (TypeError, ValueError):
+                raise ValueError('非法模式配额')
+            if not targets or any(int(mode) < 0 for mode in targets) or set(counts) - set(targets):
+                raise ValueError('非法模式配额')
+            quota = state.setdefault('modeQuotas', {}).setdefault(slug, {
+                'counts': {}, 'targets': targets, 'reservations': {}, 'specialComplete': False,
+            })
+            if quota.get('targets') != targets:
+                raise ValueError('同一游戏模式配额不一致')
+            for mode, value in counts.items():
+                quota['counts'][mode] = max(int(quota['counts'].get(mode, 0)), value)
+            reservation = quota['reservations'].get(worker)
+            if reservation is None:
+                reservation = {}
+                quota['reservations'][worker] = reservation
+                for mode, target in targets.items():
+                    if mode == '0':
+                        continue
+                    outstanding = sum(max(0, int(values.get(mode, 0)) - int(values.get('_done_' + mode, 0)))
+                                      for owner, values in quota['reservations'].items() if owner != worker)
+                    remaining = max(0, target - int(quota['counts'].get(mode, 0)) - outstanding)
+                    owners = sum(mode in values for owner, values in quota['reservations'].items() if owner != worker)
+                    slots = max(1, state['topology']['maxShards'] - owners)
+                    reservation[mode] = (remaining + slots - 1) // slots
+                    reservation['_done_' + mode] = 0
+            local_targets = dict(counts)
+            for mode in targets:
+                local_targets[mode] = counts.get(mode, 0) + int(reservation.get(mode, 0))
+            quota['specialComplete'] = all(int(quota['counts'].get(mode, 0)) >= target
+                                           for mode, target in targets.items() if mode != '0')
+            return {'targets': local_targets, 'specialComplete': quota['specialComplete']}
         if op == 'load':
             names = [slug + '.ndjson', 'feature-inventory.json', 'coverage.json', 'mode-coverage.json', 'capture-checkpoint.json']
             if req.get('chunked') is True:
@@ -497,6 +634,17 @@ class Store:
             with (private / 'hashes.txt').open('a') as index:
                 index.write(''.join(doc['sourceRoundHash'] + '\n' for doc, _ in fresh))
             known.update(doc['sourceRoundHash'] for doc, _ in fresh)
+            claim['documentsWritten'] = int(claim.get('documentsWritten', 0)) + len(fresh)
+            quota = state.get('modeQuotas', {}).get(slug)
+            if quota:
+                reservation = quota.get('reservations', {}).get(worker, {})
+                for doc, _line in fresh:
+                    mode = str(int(doc.get('buy', 0)))
+                    quota['counts'][mode] = int(quota['counts'].get(mode, 0)) + 1
+                    done_key = '_done_' + mode
+                    reservation[done_key] = int(reservation.get(done_key, 0)) + 1
+                quota['specialComplete'] = all(int(quota['counts'].get(mode, 0)) >= target
+                                               for mode, target in quota.get('targets', {}).items() if mode != '0')
             if self.memory is not None:
                 self.unsynced[slug] = self.unsynced.get(slug, 0) + len(fresh)
                 if self.unsynced[slug] >= DATA_FSYNC_EVERY:
@@ -513,10 +661,15 @@ class Store:
         if op == 'done':
             # 一个游戏释放租约前必须提交最后不足一组的数据。
             self.sync_game(folder, slug)
-            state['claims'][slug]['status'] = req['status']
-            state['claims'][slug]['count'] = req.get('count', 0)
-            baseline = state['claims'][slug].get('baselineCount', 0)
-            state['metrics']['documentsWritten'] += max(0, int(req.get('count', 0)) - baseline)
+            claim['status'] = req['status']
+            claim['count'] = req.get('count', 0)
+            claim['reason'] = str(req.get('reason', ''))[:200]
+            state['metrics']['documentsWritten'] += int(claim.get('documentsWritten', 0))
+            if claim.get('specialOnly'):
+                quota = state.setdefault('modeQuotas', {}).setdefault(slug, {})
+                if req['status'] == 'unavailable':
+                    quota['unavailable'] = True
+                self.release_mode_reservation(state, worker, slug)
             return {}
         key = str(req.get('key', ''))
         if not re.fullmatch(r'[a-f0-9]{64}', key):

@@ -64,6 +64,37 @@ class RecoveryTests(unittest.TestCase):
         second = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)
         self.assertEqual(second['slug'], 'two')
 
+    def test_purchase_modes_split_exactly_across_two_different_nodes(self):
+        atomic(self.root / 'games/registry.json', {'games': [
+            {'slug': 'one', 'discovery': {'settings': {'buyBonusPrices': {'1': 50}, 'boosterPrices': {'1': 2}}}},
+            {'slug': 'two'},
+        ]})
+        self.call('end')
+        self.call('begin', threads=2, nodes=4, maxInFlight=8, maxClaims=4, maxShards=2)
+        first = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.0'}, check_legacy=False)
+        same_node = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.1'}, check_legacy=False)
+        second = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2.0'}, check_legacy=False)
+        self.assertEqual((first['slug'], first['specialOnly'], first['shardIndex']), ('one', True, 1))
+        self.assertIn('wait', same_node)
+        self.assertEqual((second['slug'], second['specialOnly'], second['shardIndex']), ('one', True, 2))
+
+        counts = {'0': 50000, '1': 4000, '1001': 100}
+        targets = {'0': 100000, '1': 10000, '1001': 10000}
+        reserved_first = self.store.call({'op': 'reserve_modes', 'run': '100-1', 'worker': '1.0',
+                                          'slug': 'one', 'counts': counts, 'targets': targets}, check_legacy=False)
+        reserved_second = self.store.call({'op': 'reserve_modes', 'run': '100-1', 'worker': '2.0',
+                                           'slug': 'one', 'counts': counts, 'targets': targets}, check_legacy=False)
+        self.assertEqual(reserved_first['targets']['0'], counts['0'])
+        self.assertEqual(reserved_second['targets']['0'], counts['0'])
+        self.assertEqual(sum(result['targets']['1'] - counts['1'] for result in (reserved_first, reserved_second)), 6000)
+        self.assertEqual(sum(result['targets']['1001'] - counts['1001'] for result in (reserved_first, reserved_second)), 9900)
+
+        for worker, number in [('1.0', 1), ('2.0', 2)]:
+            document = {'game': 'one', 'buy': 1, 'sourceRoundHash': format(number, '064x'), 'data': [number]}
+            self.store.call({'op': 'append_batch', 'run': '100-1', 'worker': worker, 'slug': 'one',
+                             'lines': [json.dumps(document)]}, check_legacy=False)
+        self.assertEqual(self.call('status')['modeQuotas']['one']['counts']['1'], 4002)
+
     def test_ack_after_durable_append_and_restore(self):
         self.call('pending', value={'id': 'round', 'frames': [{'frame': 1}]})
         document = {'game': 'one', 'sourceRoundHash': 'a' * 64, 'data': [1]}
@@ -396,13 +427,13 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(len(responses), 3)
         self.assertTrue(all(response['ok'] for response in responses))
         self.assertEqual(responses[1]['result']['slug'], 'two')
-        # 两个游戏都已认领，第三次必须返回停止而不是重复分配。
-        self.assertTrue(responses[2]['result']['stop'])
+        # 两个游戏都已认领，第三次等待空出的租约，不能重复分配或提前退出。
+        self.assertIn('wait', responses[2]['result'])
 
     def test_game_local_ops_use_per_game_lock_not_global(self):
-        # 只有会改共享状态的操作才抢全局锁：否则 append/ack 会白占全局锁，
-        # 全局锁被 fsync 占满后每轮延迟随并发线性变差（实测 6→24 会话时每轮 2→7.5 秒）。
-        self.assertEqual(self.store.lock_path({'op': 'append', 'slug': 'one'}).name, 'one.game.lock')
+        # 分片 append 会原子推进共享模式配额，因此和 claim/done 共用队列锁；
+        # 纯文件恢复与 ack 仍走游戏锁，避免无关 I/O 白占全局锁。
+        self.assertEqual(self.store.lock_path({'op': 'append', 'slug': 'one'}).name, 'queue.lock')
         self.assertEqual(self.store.lock_path({'op': 'ack', 'slug': 'one'}).name, 'one.game.lock')
         self.assertEqual(self.store.lock_path({'op': 'load', 'slug': 'one'}).name, 'one.game.lock')
         for op in ('permit', 'response', 'claim', 'begin', 'end', 'done', 'status'):

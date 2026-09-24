@@ -17,6 +17,8 @@ export interface CaptureRuntime {
   noteMongo?(ms: number): void;
   /** 官方 launch/login/start 已通过；此回调之后才允许发出 spin。 */
   sessionReady?(game: string): void;
+  /** 多节点模式采集由协调器原子分配各模式的本地绝对目标。 */
+  reserveModeTargets?(counts: Record<number, number>, targets: Record<number, number>): Record<number, number>;
   shouldStop(): boolean;
 }
 export let captureRuntime: CaptureRuntime | undefined;

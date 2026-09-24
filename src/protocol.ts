@@ -127,7 +127,14 @@ export { parsePlayConfig } from "./game-definition";
 export async function openSession(game?: GameDiscovery): Promise<Session> {
   const definition = game ?? await discoverGame("sun_of_egypt");
   const launchUrl = await fetchLaunchUrl(definition.playUrl);
-  const page = await fetchText(launchUrl);
+  let page: Awaited<ReturnType<typeof fetchText>>;
+  try { page = await fetchText(launchUrl); }
+  catch (error) {
+    if (error instanceof ProtocolHttpError) {
+      throw new ProtocolHttpError(`PLAY_PAGE_HTTP_${error.status}`, error.status, error.retryAfterMs);
+    }
+    throw error;
+  }
   const config = parsePlayConfig(page.text);
   const queue = String(config.options.queue);
   const token = String(new URL(launchUrl).searchParams.get("token") ?? config.options.token);

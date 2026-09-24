@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fetchLaunchUrl, fetchText, launchApiEndpoint, ProtocolHttpError, ProtocolStatusError } from '../src/protocol';
+import { fetchLaunchUrl, fetchText, launchApiEndpoint, openSession, ProtocolHttpError, ProtocolStatusError } from '../src/protocol';
 import { gameRegistrationUnavailable, permanentSessionError } from '../oaks';
 
 test('启动页 HTTP 错误保留状态和 Retry-After，不能泄露 URL token', async () => {
@@ -15,6 +15,27 @@ test('启动页 HTTP 错误保留状态和 Retry-After，不能泄露 URL token'
       assert.equal(permanentSessionError(error), false);
       return true;
     });
+  } finally { globalThis.fetch = original; }
+});
+
+test('会话启动区分游戏地址生成失败与启动页 404', async () => {
+  const original = globalThis.fetch;
+  try {
+    let requests = 0;
+    globalThis.fetch = async () => {
+      requests += 1;
+      return requests === 1
+        ? Response.json({ success: true, data: 'https://3oaks.ssgfivegame.com/api/v1/games/sun_of_egypt/play?token=private' })
+        : new Response('', { status: 404 });
+    };
+    await assert.rejects(openSession({ playUrl: 'https://3oaks.com/games/sun_of_egypt/play' } as any), error => {
+      assert.ok(error instanceof ProtocolHttpError);
+      assert.equal(error.status, 404);
+      assert.equal(error.message, 'PLAY_PAGE_HTTP_404');
+      assert.equal(gameRegistrationUnavailable(error), true);
+      return true;
+    });
+    assert.equal(requests, 2);
   } finally { globalThis.fetch = original; }
 });
 

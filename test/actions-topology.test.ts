@@ -58,7 +58,7 @@ test("同时活跃的官方会话数受限，不能等于线程总数", () => {
   assert.match(worker, /maxClaims: numberFromEnv\('OAKS_MAX_CLAIMS', 24\)/);
   assert.doesNotMatch(worker, /maxClaims: threads \* nodes/);
   assert.match(worker, /maxShards: numberFromEnv\('OAKS_SHARDS_PER_GAME', 2\)/);
-  assert.match(worker, /phase: 'catalog-coverage'/);
+  assert.match(worker, /responseFields: Object\.keys\(data\)/);
 });
 
 test("begin 把线程与节点拓扑交给协调器作为并发预算", () => {

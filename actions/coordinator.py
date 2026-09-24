@@ -498,7 +498,7 @@ class Store:
                 secondary = state['claims'].get(secondary_key)
                 if quota.get('specialComplete') or quota.get('unavailable') or not primary:
                     continue
-                if primary.get('status') != 'running' or primary.get('node') == node:
+                if primary.get('status') not in ('running', 'unavailable') or primary.get('node') == node:
                     continue
                 if secondary and not reclaimable(secondary, now):
                     continue
@@ -508,7 +508,7 @@ class Store:
             unresolved_modes = any(
                 not state.get('modeQuotas', {}).get(slug, {}).get('specialComplete')
                 and not state.get('modeQuotas', {}).get(slug, {}).get('unavailable')
-                and not any(claim_slug(key, claim) == slug and claim.get('status') in ('failed', 'unavailable')
+                and not any(claim_slug(key, claim) == slug and claim.get('status') == 'failed'
                             for key, claim in state['claims'].items())
                 for slug in mode_games
             )
@@ -677,7 +677,10 @@ class Store:
             if claim.get('specialOnly'):
                 quota = state.setdefault('modeQuotas', {}).setdefault(slug, {})
                 if req['status'] == 'unavailable':
-                    quota['unavailable'] = True
+                    nodes = set(quota.get('unavailableNodes', []))
+                    nodes.add(str(claim.get('node', node)))
+                    quota['unavailableNodes'] = sorted(nodes)
+                    quota['unavailable'] = len(nodes) >= state['topology']['maxShards']
                 self.release_mode_reservation(state, worker, slug)
             return {}
         key = str(req.get('key', ''))

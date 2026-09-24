@@ -110,6 +110,25 @@ class RecoveryTests(unittest.TestCase):
         retried = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)
         self.assertEqual((retried['slug'], retried['specialOnly']), ('one', True))
 
+    def test_unavailable_requires_two_different_nodes(self):
+        atomic(self.root / 'games/registry.json', {'games': [
+            {'slug': 'one', 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}},
+        ]})
+        self.call('end')
+        self.call('begin', nodes=4, maxClaims=2, maxShards=2)
+        self.assertEqual(self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.0'}, check_legacy=False)['shardIndex'], 1)
+        self.store.call({'op': 'done', 'run': '100-1', 'worker': '1.0', 'slug': 'one',
+                         'status': 'unavailable'}, check_legacy=False)
+        quota = self.call('status')['modeQuotas']['one']
+        self.assertFalse(quota['unavailable'])
+        self.assertEqual(quota['unavailableNodes'], ['1'])
+        self.assertIn('wait', self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.1'}, check_legacy=False))
+        second = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2.0'}, check_legacy=False)
+        self.assertEqual(second['shardIndex'], 2)
+        self.store.call({'op': 'done', 'run': '100-1', 'worker': '2.0', 'slug': 'one',
+                         'status': 'unavailable'}, check_legacy=False)
+        self.assertTrue(self.call('status')['modeQuotas']['one']['unavailable'])
+
     def test_ack_after_durable_append_and_restore(self):
         self.call('pending', value={'id': 'round', 'frames': [{'frame': 1}]})
         document = {'game': 'one', 'sourceRoundHash': 'a' * 64, 'data': [1]}

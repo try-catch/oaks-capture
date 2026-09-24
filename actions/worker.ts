@@ -388,9 +388,15 @@ async function main(): Promise<void> {
         if (stage === 'catalog' && response.ok) {
           const data = await response.json() as any;
           const items = Array.isArray(data.data) ? data.data : [];
+          const { readRegistry } = await import('../catalog-sync');
+          const registered = (await readRegistry()).games.filter(game => game.active !== false);
+          const catalogIds = new Set(items.map((item: any) => String(item.gameId)));
+          const missing = registered.filter(game => !catalogIds.has(game.slug)).map(game => game.slug);
           console.log(JSON.stringify({ phase: 'catalog-shape', itemCount: items.length,
             itemFields: Object.keys(items[0] ?? {}).filter(key => /^[A-Za-z]+$/.test(key)) }));
-          launchReady = items.some((item: any) => item.gameId === slug);
+          console.log(JSON.stringify({ phase: 'catalog-coverage', registered: registered.length,
+            available: registered.length - missing.length, missing }));
+          launchReady = catalogIds.has(slug);
         }
       }
       if (launchReady) {

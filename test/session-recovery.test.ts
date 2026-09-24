@@ -46,7 +46,14 @@ test("会话重开与结果未知都只丢弃这一局，普通错误仍然直�
   assert.equal(recoverableRoundError(new ProtocolHttpError("503", 503, 0)), true);
   assert.equal(recoverableRoundError(new ProtocolStatusError("FUNDS_EXCEED", "play: funds")), true);
   assert.equal(recoverableRoundError(new TypeError("fetch failed")), true);
+  assert.equal(recoverableRoundError(new DOMException("The operation was aborted due to timeout", "TimeoutError")), true);
+  assert.equal(recoverableRoundError(new Error("game 连续失败 6 次: play: 官方响应不是 JSON")), true);
   assert.equal(recoverableRoundError(new Error("结果缺少当前局 total_win/round_win")), false);
+});
+
+test("临时上游故障只释放当前游戏，worker 继续补满并发槽位", () => {
+  assert.match(worker, /else if \(recoverableRoundError\(error\)\) status = 'failed';/);
+  assert.doesNotMatch(worker, /recoverableRoundError\(error\)\)[^{\n]*\{[^}]*stopping = true/);
 });
 
 test("持久化模式下不再一遇错误就让整个游戏失败", () => {

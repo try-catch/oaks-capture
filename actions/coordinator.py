@@ -475,15 +475,15 @@ class Store:
                 quota = state.get('modeQuotas', {}).get(slug, {})
                 primary = state['claims'].get(slug)
                 secondary = state['claims'].get(slug + '#2')
-                if self.accepted(slug):
-                    state['claims'][slug] = {'slug': slug, 'status': 'already-accepted'}
-                    state.setdefault('modeQuotas', {})[slug] = {'specialComplete': True, 'accepted': True}
-                    continue
                 if quota.get('specialComplete') or quota.get('unavailable'):
                     continue
                 if primary and not reclaimable(primary, now):
                     continue
                 if primary and primary.get('status') == 'shard-complete' and secondary and secondary.get('status') == 'running':
+                    continue
+                if self.accepted(slug):
+                    state['claims'][slug] = {'slug': slug, 'status': 'already-accepted'}
+                    state.setdefault('modeQuotas', {})[slug] = {'specialComplete': True, 'accepted': True}
                     continue
                 return self.grant_claim(state, req, worker, node, slug, slug, True, 1)
 

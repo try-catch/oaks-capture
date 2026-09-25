@@ -111,6 +111,18 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.0'},
                                          check_legacy=False)['slug'], 'g4')
 
+    def test_claim_start_spacing_prevents_simultaneous_history_restore(self):
+        self.call('end')
+        self.call('begin', nodes=2, maxClaims=2, claimStartSpacingMs=15000)
+        self.assertIn('slug', self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.0'}, check_legacy=False))
+        waiting = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2.0'}, check_legacy=False)
+        self.assertGreater(waiting['wait'], 0)
+        self.assertLessEqual(waiting['wait'], 15000)
+        state = read(self.store.state_path)
+        state['nextClaimAt'] = 0
+        atomic(self.store.state_path, state)
+        self.assertIn('slug', self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2.0'}, check_legacy=False))
+
     def test_transient_failure_retries_after_cooldown(self):
         atomic(self.root / 'games/registry.json', {'games': [
             {'slug': 'one', 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}},

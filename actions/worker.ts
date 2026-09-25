@@ -434,6 +434,7 @@ async function main(): Promise<void> {
       maxInFlight: threads * nodes,
       // 同时活跃的官方游戏会话数必须限制：demo 后端在大量并发会话时返回 GAME_REOPENED。
       maxClaims: numberFromEnv('OAKS_MAX_CLAIMS', 24),
+        claimStartSpacingMs: numberFromEnv('OAKS_CLAIM_START_SPACING_MS', 0),
         maxShards: numberFromEnv('OAKS_SHARDS_PER_GAME', 2),
         deadlineMinutes: numberFromEnv('OAKS_DEADLINE_MINUTES', 40),
       })));

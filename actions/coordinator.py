@@ -357,6 +357,7 @@ class Store:
         }
         if shard_index != 2:
             state['cursor'] = state['games'][(state['games'].index(slug) + 1) % len(state['games'])]
+        state['nextClaimAt'] = time.time() * 1000 + state['topology'].get('claimStartSpacingMs', 0)
         clear_claim_backoff(state, worker)
         return {'slug': slug, 'deadline': state['deadline'], 'specialOnly': special_only, 'shardIndex': shard_index}
 
@@ -388,7 +389,7 @@ class Store:
                                       'maxInFlight': 1, 'maxClaims': 6, 'maxShards': 1})
         state['topology'].setdefault('maxShards', 1)
         if op == 'status':
-            return {key: state.get(key) for key in ('owner', 'until', 'next', 'claims', 'deadline', 'halted', 'topology', 'metrics', 'serverHealth', 'serverHalt')} | {
+            return {key: state.get(key) for key in ('owner', 'until', 'next', 'nextClaimAt', 'claims', 'deadline', 'halted', 'topology', 'metrics', 'serverHealth', 'serverHalt')} | {
                 'permits': len(state['permits']), 'nodeUntil': state['nodeUntil'],
                 'restoreChunkBytes': RESTORE_CHUNK_BYTES,
                 'maxModeShards': 2,
@@ -432,13 +433,14 @@ class Store:
                 # 非 workflow 调用仍保留保守回退；正式 workflow 会显式传入 24。
                 'maxClaims': positive_int(req.get('maxClaims'), 6),
                 'maxShards': min(2, positive_int(req.get('maxShards'), 2)),
+                'claimStartSpacingMs': positive_int(req.get('claimStartSpacingMs'), 0),
                 'deadline': now + positive_int(req.get('deadlineMinutes'), 40) * 60_000,
             }
             metrics = {'startedAt': now, 'documentsWritten': 0, 'responses': 0, 'http429': 0, 'businessErrors': {}}
             state.update(owner=run, deadline=topology['deadline'], claims={}, games=games, modeGames=mode_games,
                          modeQuotas={}, waiters=[],
                          permits={}, nodeUntil={}, nodeThrottle={}, halted={}, rateNodes=[], topology=topology,
-                         metrics=metrics, claimWaits={}, serverHalt=None)
+                         metrics=metrics, claimWaits={}, nextClaimAt=0, serverHalt=None)
             return {'deadline': state['deadline'], 'until': state['until'], 'games': len(games), 'topology': topology}
         if state['owner'] != run:
             raise ValueError('跨环境队列锁不属于当前运行')
@@ -467,6 +469,8 @@ class Store:
             per_node = max(1, (state['topology']['maxClaims'] + state['topology']['nodes'] - 1) // state['topology']['nodes'])
             if sum(claim.get('node') == node for claim in running) >= per_node:
                 return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
+            if now < state.get('nextClaimAt', 0):
+                return {'wait': min(15_000, state['nextClaimAt'] - now), 'deadline': state['deadline']}
 
             # 优先把安全的全局会话预算铺给不同购买/加注游戏；有空位再给第二分片。
             # 每轮从上轮 cursor 接续，避免固定顺序让后面的游戏长期排不到。

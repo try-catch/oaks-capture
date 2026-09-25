@@ -355,7 +355,8 @@ class Store:
             'runner': req.get('runner', {}), 'baselineCount': baseline,
             'documentsWritten': 0, 'specialOnly': special_only, 'shardIndex': shard_index,
         }
-        state['cursor'] = state['games'][(state['games'].index(slug) + 1) % len(state['games'])]
+        if shard_index != 2:
+            state['cursor'] = state['games'][(state['games'].index(slug) + 1) % len(state['games'])]
         clear_claim_backoff(state, worker)
         return {'slug': slug, 'deadline': state['deadline'], 'specialOnly': special_only, 'shardIndex': shard_index}
 
@@ -414,11 +415,12 @@ class Store:
             registry = read(self.root / 'games' / 'registry.json')
             active_games = [game for game in registry['games'] if game.get('active', True)]
             games = [game['slug'] for game in active_games]
-            mode_games = [game['slug'] for game in active_games if has_special_modes(game)]
+            mode_set = {game['slug'] for game in active_games if has_special_modes(game)}
             cursor = state.get('cursor', handoff.get('slug'))
             if cursor in games:
                 at = games.index(cursor)
                 games = games[at:] + games[:at]
+            mode_games = [slug for slug in games if slug in mode_set]
             threads = positive_int(req.get('threads'), 1)
             nodes = positive_int(req.get('nodes'), 1)
             topology = {
@@ -466,30 +468,24 @@ class Store:
             if sum(claim.get('node') == node for claim in running) >= per_node:
                 return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
 
-            # 先让一半全局会话各占一款购买/加注游戏，再把另一半配成不同节点的第二分片。
-            # 总会话仍受 maxClaims 限制，不增加服务商并发，只把容量从普通旋转转给模式缺口。
+            # 优先把安全的全局会话预算铺给不同购买/加注游戏；有空位再给第二分片。
+            # 每轮从上轮 cursor 接续，避免固定顺序让后面的游戏长期排不到。
             mode_games = state.get('modeGames', [])
-            primary_limit = max(1, (state['topology']['maxClaims'] + state['topology']['maxShards'] - 1)
-                                // state['topology']['maxShards'])
-            active_primaries = sum(1 for claim in state['claims'].values()
-                                   if claim.get('status') == 'running' and claim.get('specialOnly')
-                                   and int(claim.get('shardIndex', 0)) == 1)
-            if active_primaries < primary_limit:
-                for slug in mode_games:
-                    quota = state.get('modeQuotas', {}).get(slug, {})
-                    primary = state['claims'].get(slug)
-                    secondary = state['claims'].get(slug + '#2')
-                    if self.accepted(slug):
-                        state['claims'][slug] = {'slug': slug, 'status': 'already-accepted'}
-                        state.setdefault('modeQuotas', {})[slug] = {'specialComplete': True, 'accepted': True}
-                        continue
-                    if quota.get('specialComplete') or quota.get('unavailable'):
-                        continue
-                    if primary and not reclaimable(primary, now):
-                        continue
-                    if primary and primary.get('status') == 'shard-complete' and secondary and secondary.get('status') == 'running':
-                        continue
-                    return self.grant_claim(state, req, worker, node, slug, slug, True, 1)
+            for slug in mode_games:
+                quota = state.get('modeQuotas', {}).get(slug, {})
+                primary = state['claims'].get(slug)
+                secondary = state['claims'].get(slug + '#2')
+                if self.accepted(slug):
+                    state['claims'][slug] = {'slug': slug, 'status': 'already-accepted'}
+                    state.setdefault('modeQuotas', {})[slug] = {'specialComplete': True, 'accepted': True}
+                    continue
+                if quota.get('specialComplete') or quota.get('unavailable'):
+                    continue
+                if primary and not reclaimable(primary, now):
+                    continue
+                if primary and primary.get('status') == 'shard-complete' and secondary and secondary.get('status') == 'running':
+                    continue
+                return self.grant_claim(state, req, worker, node, slug, slug, True, 1)
 
             for slug in mode_games:
                 quota = state.get('modeQuotas', {}).get(slug, {})

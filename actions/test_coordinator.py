@@ -95,6 +95,22 @@ class RecoveryTests(unittest.TestCase):
                              'lines': [json.dumps(document)]}, check_legacy=False)
         self.assertEqual(self.call('status')['modeQuotas']['one']['counts']['1'], 4002)
 
+    def test_mode_claims_cover_distinct_games_before_second_shards_and_rotate(self):
+        atomic(self.root / 'games/registry.json', {'games': [
+            {'slug': f'g{number}', 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}}
+            for number in range(6)
+        ]})
+        self.call('end')
+        self.call('begin', nodes=4, maxClaims=4, maxShards=2)
+        claims = [self.store.call({'op': 'claim', 'run': '100-1', 'worker': f'{number}.0'}, check_legacy=False)
+                  for number in range(1, 5)]
+        self.assertEqual([claim['slug'] for claim in claims], ['g0', 'g1', 'g2', 'g3'])
+        self.assertTrue(all(claim['shardIndex'] == 1 for claim in claims))
+        self.call('end')
+        self.call('begin', nodes=4, maxClaims=4, maxShards=2)
+        self.assertEqual(self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.0'},
+                                         check_legacy=False)['slug'], 'g4')
+
     def test_transient_failure_retries_after_cooldown(self):
         atomic(self.root / 'games/registry.json', {'games': [
             {'slug': 'one', 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}},

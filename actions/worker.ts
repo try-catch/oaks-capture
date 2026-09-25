@@ -424,9 +424,26 @@ async function main(): Promise<void> {
     requireProviderAuthorization();
     const threads = activeThreads();
     const nodes = numberFromEnv('OAKS_NODES', 1);
+    let preferredGames: string[] | undefined;
+    try {
+      const response = await fetch('https://www.wxgame99.com/api/game_list', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ appId: '1001', gameBrand: '3oaks', gameType: 'slot' }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (response.ok) {
+        const catalog = await response.json() as any;
+        const ids: unknown[] = Array.isArray(catalog.data) ? catalog.data.map((item: any) => item.gameId) : [];
+        const valid = [...new Set(ids.filter((id: unknown): id is string =>
+          typeof id === 'string' && /^[a-z0-9_]+$/.test(id)))];
+        if (catalog.success === true && valid.length >= 70 && valid.includes('sun_of_egypt')) preferredGames = valid;
+      }
+    } catch { /* 目录不可用时保留原有调度，不阻断采集。 */ }
+    console.log(JSON.stringify({ phase: 'catalog-schedule', preferred: preferredGames?.length ?? 0 }));
     try {
       console.log(JSON.stringify(rpc('begin', {
       githubToken: process.env.OAKS_GITHUB_TOKEN,
+      preferredGames,
       threads,
       nodes,
       nodeMs: numberFromEnv('OAKS_NODE_SPACING_MS', 250),

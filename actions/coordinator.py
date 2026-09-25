@@ -421,6 +421,14 @@ class Store:
             if cursor in games:
                 at = games.index(cursor)
                 games = games[at:] + games[:at]
+            preferred = req.get('preferredGames')
+            if preferred is not None:
+                if (not isinstance(preferred, list) or len(preferred) > 500
+                        or any(not isinstance(slug, str) or not re.fullmatch(r'[a-z0-9_]+', slug) for slug in preferred)):
+                    raise ValueError('非法站点目录游戏列表')
+                listed = set(preferred)
+                # 只把站点列出的游戏排在前面；未列出的仍可在空位时复核，不永久跳过。
+                games = [slug for slug in games if slug in listed] + [slug for slug in games if slug not in listed]
             mode_games = [slug for slug in games if slug in mode_set]
             threads = positive_int(req.get('threads'), 1)
             nodes = positive_int(req.get('nodes'), 1)

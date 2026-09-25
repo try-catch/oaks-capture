@@ -111,6 +111,17 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.0'},
                                          check_legacy=False)['slug'], 'g4')
 
+    def test_site_catalog_prioritizes_listed_games_without_hiding_others(self):
+        atomic(self.root / 'games/registry.json', {'games': [
+            {'slug': slug, 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}}
+            for slug in ('one', 'two', 'three')
+        ]})
+        self.call('end')
+        self.call('begin', nodes=3, maxClaims=3, preferredGames=['three', 'two'])
+        claims = [self.store.call({'op': 'claim', 'run': '100-1', 'worker': f'{number}.0'}, check_legacy=False)
+                  for number in range(1, 4)]
+        self.assertEqual([claim['slug'] for claim in claims], ['two', 'three', 'one'])
+
     def test_claim_start_spacing_prevents_simultaneous_history_restore(self):
         self.call('end')
         self.call('begin', nodes=2, maxClaims=2, claimStartSpacingMs=15000)

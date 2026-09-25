@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { remainingModeActions, selectedModeTypes } from "../oaks";
+import { remainingModeActions, selectedModeTypes, syncModeCountsFromMongo } from "../oaks";
 import type { PlayAction } from "../src/shop";
 
 const normal: PlayAction = {name: "spin", params: {}};
@@ -25,6 +25,14 @@ test("购买和加注全部达标前不选择普通旋转", () => {
 test("分片模式可为每种购买和加注设置独立本地目标", () => {
   assert.deepEqual(remainingModeActions(actions, {0: 50000, 1: 7000, 2: 5050, 1001: 5050}, 100000, 10000,
     {0: 50000, 1: 7000, 2: 5050, 1001: 5050}), []);
+});
+
+test("恢复时以 Mongo 已入库模式数量阻止跨轮超采", async () => {
+  const counts = {0: 100000, 1: 10, 2: 8000};
+  const collection = {aggregate: () => ({toArray: async () => [{_id: 1, count: 22141}, {_id: 2, count: 7000}]})};
+  await syncModeCountsFromMongo(collection, counts);
+  assert.deepEqual(counts, {0: 100000, 1: 22141, 2: 8000});
+  assert.deepEqual(remainingModeActions(actions, counts, 100000, 10000), [second, booster]);
 });
 
 test("配额动作可按代码声明模式过滤官方隐藏入口", () => {

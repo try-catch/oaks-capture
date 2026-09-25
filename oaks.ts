@@ -255,6 +255,18 @@ export function remainingModeActions(
     .sort((left, right) => Number(actionSpinType(left) === 0) - Number(actionSpinType(right) === 0));
 }
 
+export async function syncModeCountsFromMongo(collection: any, counts: Record<number, number>): Promise<void> {
+  // NDJSON 恢复点可能落后于已确认入库的数据；模式配额以两者较大值为准，避免跨轮超采。
+  const rows = await collection.aggregate([
+    { $match: { buy: { $gt: 0 } } },
+    { $group: { _id: "$buy", count: { $sum: 1 } } },
+  ], { hint: { buy: 1 } }).toArray();
+  for (const row of rows) {
+    const mode = Number(row._id);
+    if (Number.isInteger(mode) && mode > 0) counts[mode] = Math.max(counts[mode] ?? 0, Number(row.count));
+  }
+}
+
 export interface CaptureGameOptions {
   partialModeQuota?: boolean;
   skipMongoSync?: boolean;
@@ -310,6 +322,7 @@ export async function captureGame(
     collection = mongo.db(database).collection(MONGO_COLLECTION);
     await ensureMongoIndexes(collection);
     const repaired = options.skipMongoSync ? 0 : await syncMongoRounds(collection, priorDocuments);
+    if (modeQuota && captureRuntime) await syncModeCountsFromMongo(collection, modeCounts);
     console.log(`[Mongo] 已连接 ${database}.${MONGO_COLLECTION}${repaired ? `，批量修复 ${repaired} 条历史数据` : "，历史数量一致无需重写"}`);
   } catch (error) {
     if (captureRuntime) throw new Error("测试服 Mongo 连接或去重同步失败，禁止发出官方请求");

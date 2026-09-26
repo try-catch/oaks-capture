@@ -6,6 +6,7 @@ import { spawnSync, fork } from 'node:child_process';
 import { installCaptureRuntime, PendingRound } from '../src/capture-runtime';
 import { CoordinatorChannel } from '../src/coordinator-channel';
 import { restoreData } from '../src/restore-data';
+import { countNdjsonLines } from '../src/ndjson-lines';
 import { browserFetch, closeBrowserTransport } from '../src/browser-transport';
 
 const root = path.resolve(__dirname, '..');
@@ -331,7 +332,15 @@ async function runThread(): Promise<void> {
       console.log = originalLog;
       console.warn = originalWarn;
       const file = path.join(directory, `${slug}.ndjson`);
-      const count = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).length : 0;
+      let count = 0;
+      try {
+        count = fs.existsSync(file) ? await countNdjsonLines(file) : 0;
+      } catch {
+        status = 'failed';
+        reason = 'LOCAL_COUNT_FAILED';
+        stopping = true;
+        process.exitCode = 1;
+      }
       // 节点被熔断时协调器会交回租约，此时本轮落盘和状态回写会被拒绝，数据已在测试服 NDJSON 中。
       try {
         syncFiles();

@@ -1,4 +1,5 @@
 import { finalizeTestCapture } from "./src/test-finalization";
+import { ndjsonLines } from "./src/ndjson-lines";
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -109,16 +110,18 @@ async function openSessionWithRetry(
   throw lastError;
 }
 
-async function readDocuments(filename: string): Promise<CapturedDocument[]> {
-  const content = await fs.readFile(filename, "utf8").catch(() => "");
+export async function readDocuments(filename: string): Promise<CapturedDocument[]> {
+  // ponytail: 仍保留历史对象供现有校验/同步复用；若对象堆成为瓶颈再改分批聚合。
   const documents: CapturedDocument[] = [];
-  for (const [index, line] of content.split(/\r?\n/).filter(Boolean).entries()) {
+  let index = 0;
+  for await (const line of ndjsonLines(filename)) {
+    index++;
     try {
       const document = JSON.parse(line) as CapturedDocument;
       document.sourceRoundHash = String(document.sourceRoundHash ?? sourceRoundHash(document));
       documents.push(document);
     } catch (error) {
-      throw new Error(`${filename} 第 ${index + 1} 行无法恢复: ${(error as Error).message}`);
+      throw new Error(`${filename} 第 ${index} 条记录无法恢复`);
     }
   }
   return documents;

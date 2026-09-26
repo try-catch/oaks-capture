@@ -24,9 +24,15 @@ test('原生浏览器传输保留响应、限速头并隔离客户端请求头',
   let launches = 0, closes = 0, status = 200;
   let fail = false;
   const listeners = new Map<string, (request: any) => void>();
+  const networkListeners = new Map<string, (event: any) => void>();
+  let detached = 0;
   let sent: any;
   const payload = Buffer.from('{"status":{"code":"OK"},"value":"完整响应"}');
   const page = {
+    context: () => ({ newCDPSession: async () => ({
+      on: (event: string, listener: (event: any) => void) => { networkListeners.set(event, listener); },
+      send: async () => {}, detach: async () => { detached++; networkListeners.clear(); },
+    }) }),
     on: (event: string, listener: (request: any) => void) => { listeners.set(event, listener); },
     off: (event: string) => { listeners.delete(event); },
     goto: async () => ({ ok: () => true }),
@@ -42,6 +48,9 @@ test('原生浏览器传输保留响应、限速头并隔离客户端请求头',
     evaluate: async (_: unknown, request: any) => {
       sent = request;
       if (fail) {
+        networkListeners.get('Network.requestWillBeSent')?.({ requestId: 'one', request: { url: request.url, method: request.method } });
+        networkListeners.get('Network.responseReceivedExtraInfo')?.({ requestId: 'one', statusCode: 403 });
+        networkListeners.get('Network.loadingFailed')?.({ requestId: 'one', errorText: 'net::ERR_CONNECTION_RESET', corsErrorStatus: { corsError: 'MissingAllowOriginHeader' } });
         const native = { url: () => request.url, method: () => request.method,
           failure: () => ({ errorText: 'net::ERR_CONNECTION_RESET' }) };
         listeners.get('request')?.(native);
@@ -85,9 +94,12 @@ test('原生浏览器传输保留响应、限速头并隔离客户端请求头',
       assert.deepEqual(fetchFailureDiagnostic('https://3oaks.com/?gsc=login', error), {
         command: 'login', kind: 'response_timeout', network: 'net::ERR_CONNECTION_RESET',
         pageFetch: 'type_error', requestSeen: true,
+        httpStatus: 403, cors: 'MissingAllowOriginHeader', blocked: 'none',
       });
       return true;
     });
     assert.equal(listeners.size, 0);
+    assert.equal(networkListeners.size, 0);
+    assert.equal(detached, 4);
   } finally { await closeBrowserTransport(); chromium.launch = original; }
 });

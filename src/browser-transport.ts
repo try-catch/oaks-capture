@@ -4,7 +4,7 @@ import { ProtocolHttpError } from './protocol';
 
 // 每个 worker 进程独享一个原生浏览器上下文；不同节点、线程不共享 Cookie 或试玩用户。
 let session: Promise<{ browser: Browser; page: Page }> | undefined;
-const browserFailures = new WeakMap<Error, { network: string; pageFetch: string; requestSeen: boolean }>();
+const browserFailures = new WeakMap<Error, { network: string; pageFetch: string; requestSeen: boolean; httpStatus: number; cors: string; blocked: string }>();
 
 export function safeNetworkFailure(value: string | undefined): string {
   return ['net::ERR_FAILED', 'net::ERR_ABORTED', 'net::ERR_TIMED_OUT', 'net::ERR_CONNECTION_RESET',
@@ -65,7 +65,27 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
     // 浏览器负责真实的来源、Cookie 和客户端请求头，不伪造浏览器指纹。
     for (const name of ['origin', 'referer', 'cookie', 'user-agent', 'host', 'content-length', 'accept-encoding']) headers.delete(name);
     const body = options.body as string | undefined;
-    const diagnostic = { network: 'none', pageFetch: 'pending', requestSeen: false };
+    const diagnostic = { network: 'none', pageFetch: 'pending', requestSeen: false, httpStatus: 0, cors: 'none', blocked: 'none' };
+    // CORS 拒绝时 Playwright 可能没有 response 事件；只取原生网络元数据，不输出地址、头或正文。
+    const network = await page.context().newCDPSession(page);
+    const requestIds = new Set<string>();
+    network.on('Network.requestWillBeSent', event => {
+      if (event.request.url === url && event.request.method === method) requestIds.add(event.requestId);
+    });
+    network.on('Network.responseReceivedExtraInfo', event => {
+      if (requestIds.has(event.requestId)) diagnostic.httpStatus = event.statusCode;
+    });
+    network.on('Network.loadingFailed', event => {
+      if (!requestIds.has(event.requestId)) return;
+      diagnostic.network = safeNetworkFailure(event.errorText);
+      const cors = event.corsErrorStatus?.corsError;
+      diagnostic.cors = !cors ? 'none' : ['MissingAllowOriginHeader', 'AllowOriginMismatch',
+        'InvalidAllowOriginValue', 'PreflightMissingAllowOriginHeader', 'PreflightInvalidStatus',
+        'InsecurePrivateNetwork', 'InvalidResponse', 'WildcardOriginNotAllowed'].includes(cors) ? cors : 'other_cors';
+      const blocked = event.blockedReason;
+      diagnostic.blocked = !blocked ? 'none' : ['csp', 'mixed-content', 'origin', 'inspector',
+        'subresource-filter', 'other'].includes(blocked) ? blocked : 'other_blocked';
+    });
     const matches = (request: BrowserRequest) => request.url() === url && request.method() === method;
     const onRequest = (request: BrowserRequest) => { if (matches(request)) diagnostic.requestSeen = true; };
     const onFailed = (request: BrowserRequest) => {
@@ -74,6 +94,7 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
     page.on('request', onRequest);
     page.on('requestfailed', onFailed);
     try {
+    await network.send('Network.enable');
     const [response] = await Promise.all([
       page.waitForResponse(response => response.url() === url && response.request().method() === method,
         { timeout: REQUEST_TIMEOUT_MS }),
@@ -109,6 +130,7 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
     } finally {
       page.off('request', onRequest);
       page.off('requestfailed', onFailed);
+      await network.detach().catch(() => {});
     }
   } finally {
     options.signal?.removeEventListener('abort', abort);

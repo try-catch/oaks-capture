@@ -1,7 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
-import { browserFetch, closeBrowserTransport } from '../src/browser-transport';
+import { browserFetch, closeBrowserTransport, fetchFailureDiagnostic } from '../src/browser-transport';
+
+test('网络失败诊断区分阶段且不泄露URL或异常内容', () => {
+  const error = new Error('page.waitForResponse: Timeout 20000ms token=secret');
+  assert.deepEqual(fetchFailureDiagnostic('https://3oaks.com/?gsc=login&token=secret', error),
+    { command: 'login', kind: 'response_timeout' });
+  assert.deepEqual(fetchFailureDiagnostic('https://3oaks.com/?gsc=secret', error),
+    { command: 'unknown', kind: 'response_timeout' });
+  assert.deepEqual(fetchFailureDiagnostic('secret', new Error('secret')),
+    { command: 'unknown', kind: 'fetch_failed' });
+  assert.deepEqual(fetchFailureDiagnostic('https://3oaks.com/', new DOMException('secret', 'AbortError')),
+    { command: 'launch', kind: 'aborted' });
+  assert.equal(fetchFailureDiagnostic('https://3oaks.com/?gsc=start', new DOMException('', 'TimeoutError')).kind, 'timeout');
+});
 
 test('原生浏览器传输保留响应、限速头并隔离客户端请求头', async () => {
   const original = chromium.launch;

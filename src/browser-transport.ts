@@ -5,6 +5,20 @@ import { ProtocolHttpError } from './protocol';
 // 每个 worker 进程独享一个原生浏览器上下文；不同节点、线程不共享 Cookie 或试玩用户。
 let session: Promise<{ browser: Browser; page: Page }> | undefined;
 
+// 公开诊断只输出白名单阶段与固定类别，不携带 URL、令牌或原始异常。
+export function fetchFailureDiagnostic(url: string, error: unknown): { command: string; kind: string } {
+  let command = 'unknown';
+  try {
+    const value = new URL(url).searchParams.get('gsc') ?? 'launch';
+    if (['launch', 'login', 'start', 'play', 'logout'].includes(value)) command = value;
+  } catch { /* 非法 URL 也不得回显 */ }
+  const message = error instanceof Error ? error.message : '';
+  const kind = /page\.waitForResponse: Timeout/.test(message) ? 'response_timeout'
+    : error instanceof Error && error.name === 'TimeoutError' ? 'timeout'
+    : error instanceof Error && error.name === 'AbortError' ? 'aborted' : 'fetch_failed';
+  return { command, kind };
+}
+
 async function browserPage(): Promise<Page> {
   session ??= (async () => {
     const browser = await chromium.launch({ headless: true });

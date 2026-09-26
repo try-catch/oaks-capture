@@ -7,7 +7,7 @@ import { installCaptureRuntime, PendingRound } from '../src/capture-runtime';
 import { CoordinatorChannel } from '../src/coordinator-channel';
 import { restoreData } from '../src/restore-data';
 import { countNdjsonLines } from '../src/ndjson-lines';
-import { browserFetch, closeBrowserTransport } from '../src/browser-transport';
+import { browserFetch, closeBrowserTransport, fetchFailureDiagnostic } from '../src/browser-transport';
 
 const root = path.resolve(__dirname, '..');
 const run = `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
@@ -197,6 +197,8 @@ function installDurability(): void {
     try {
       response = await officialFetch(input, { ...options, signal: AbortSignal.timeout(20_000) });
     } catch (error) {
+      realLog(JSON.stringify({ phase: 'protocol-fetch-error', slug, worker,
+        ...fetchFailureDiagnostic(url, error), elapsedMs: Date.now() - fetchStarted }));
       // 网络失败也要归还小型许可，避免偶发超时把全局许可永久占满。
       rpc('response', { key, status: 0, usable: false, businessCode: 'FETCH_ERROR' });
       throw error;

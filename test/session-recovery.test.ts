@@ -2,10 +2,17 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { recoverableRoundError } from "../oaks";
+import { recoverableRoundError, retryDelayMs } from "../oaks";
 import { command, ProtocolHttpError, ProtocolStatusError } from "../src/protocol";
 
 const worker = fs.readFileSync(path.resolve(__dirname, "..", "actions", "worker.ts"), "utf8");
+test("局内业务失败重开前必须退避且记录 HTTP 200 的业务错误", () => {
+  const source = fs.readFileSync(path.resolve(__dirname, "..", "oaks.ts"), "utf8");
+  assert.match(source, /await waitForRetry\(Math.max\(retryDelayMs\(error, retries\), rateLimitDelay\), game\);\s*session = await openSessionWithRetry/);
+  assert.deepEqual([1, 2, 3, 4, 5].map(n => retryDelayMs(new ProtocolStatusError("SERVER_ERROR", "play"), n)), [2000, 4000, 8000, 16000, 32000]);
+  assert.equal(retryDelayMs(new ProtocolHttpError("429", 429, 120000), 5), 120000);
+  assert.ok(worker.includes("if (!response.ok || (code && code !== 'OK'))"));
+});
 const coordinator = fs.readFileSync(path.resolve(__dirname, "..", "actions", "coordinator.py"), "utf8");
 
 async function withFetch(body: string, run: () => Promise<unknown>): Promise<unknown> {

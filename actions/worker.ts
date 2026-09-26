@@ -207,7 +207,7 @@ function installDurability(): void {
     if (localResponses.size > 1000) localResponses.delete(localResponses.keys().next().value!);
     const respondStarted = Date.now();
     const code = businessStatusCode(body);
-    if (!response.ok) {
+    if (!response.ok || (code && code !== 'OK')) {
       const command = new URL(url).searchParams.get('gsc') ?? 'launch';
       const errorPage = body.toString('utf8', 0, 16384);
       realLog(JSON.stringify({ phase: 'protocol-http-error', slug, status: response.status,

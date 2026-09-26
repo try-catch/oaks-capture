@@ -475,10 +475,8 @@ export async function captureGame(
       if (retries > maxRetries) throw new Error(`${game.slug} 连续失败 ${retries} 次: ${(error as Error).message}`);
       const rateLimitDelay = throttle.recordRateLimit(error, game.slug);
       console.warn(`[retry ${game.slug} ${retries}/${maxRetries}] ${(error as Error).message}`);
-      if (rateLimitDelay > 0) {
-        console.warn(`[rate-limit ${game.slug}] 暂停整个顺序采集队列 ${Math.ceil(rateLimitDelay / 1000)} 秒`);
-        await waitForRetry(rateLimitDelay, game);
-      }
+      // 局内业务失败同样退避，避免连续重开启动页放大限流；不缩短官方冷却。
+      await waitForRetry(Math.max(retryDelayMs(error, retries), rateLimitDelay), game);
       session = await openSessionWithRetry(game, definition, throttle);
     }
   }

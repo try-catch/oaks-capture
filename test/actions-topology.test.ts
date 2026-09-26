@@ -8,10 +8,12 @@ const workflow = fs.readFileSync(path.join(root, "actions", "workflow.yml"), "ut
 const worker = fs.readFileSync(path.join(root, "actions", "worker.ts"), "utf8");
 const coordinator = fs.readFileSync(path.join(root, "actions", "coordinator.py"), "utf8");
 
-test("定时检查为每二十分钟一次且保留手工 check/capture 入口", () => {
+test("定时检查为每二十分钟一次且保留手工 check/capture/probe 入口", () => {
   assert.match(workflow, /-\s*cron:\s*'\*\/20 \* \* \* \*'/);
   assert.doesNotMatch(workflow, /cron:\s*'17 \* \* \* \*'/);
-  assert.match(workflow, /options:\s*\[check, capture\]/);
+  assert.match(workflow, /options:\s*\[check, capture, probe\]/);
+  assert.match(workflow, /run: node -r ts-node\/register actions\/worker\.ts probe/);
+  assert.match(workflow, /inputs\.mode == 'probe' && vars\.CAPTURE_ENABLED == 'true'/);
 });
 
 test("CAPTURE_ENABLED 是硬门禁，且推送触发只认专用文件", () => {
@@ -46,7 +48,7 @@ test("定时采集与链式续跑处于停止状态（2026-09-13 交由 Codex �
   assert.match(workflow, /# schedule:/);
   assert.match(workflow, /# - name: 链式派发下一轮采集/);
   // 手工入口仍保留：workflow_dispatch 与专用文件推送。
-  assert.match(workflow, /options:\s*\[check, capture\]/);
+  assert.match(workflow, /options:\s*\[check, capture, probe\]/);
   assert.match(workflow, /capture-trigger\.json/);
 });
 

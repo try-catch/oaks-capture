@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: check 只验证部署通道；capture 执行真实采集
+        description: check 验证部署；probe 单节点验证试玩会话；capture 执行真实采集
         type: choice
-        options: [check, capture]
+        options: [check, capture, probe]
         default: check
   # 定时采集已停止（2026-09-13 交由 Codex 接手）。需要恢复时取消注释即可。
   # schedule:
@@ -86,6 +86,23 @@ jobs:
           else
             echo 'capture=false' >> "$GITHUB_OUTPUT"
           fi
+  probe:
+    needs: prepare
+    if: needs.prepare.result == 'success' && inputs.mode == 'probe' && vars.CAPTURE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: python3 actions/setup-ssh.py
+      - run: node -r ts-node/register actions/worker.ts probe
+        env:
+          OAKS_GITHUB_TOKEN: ${{ github.token }}
   capture:
     needs: prepare
     # CAPTURE_ENABLED 是硬门禁。事件类型不能绕过它，否则手工 capture 即使暂停

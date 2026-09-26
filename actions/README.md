@@ -2,7 +2,7 @@
 
 公共仓库仅包含采集代码、测试和目录定义。NDJSON、凭据、原始响应及未完成局只保存在测试服，禁止上传 artifact。
 
-采集 workflow 位于 `actions/workflow.yml`，发布为 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。先用 `workflow_dispatch / check` 验证，通过后设置仓库变量 `CAPTURE_ENABLED=true`。正式采集由外部监督器在健康门禁通过后派发 `capture`：workflow 本身只有 `workflow_dispatch`，不使用 push、cron 或结束后的链式派发。使用 20 个 GitHub-hosted Linux 节点，每轮共享 45 分钟预算；单并发组最多保留一个运行和一个等待任务。
+采集 workflow 位于 `actions/workflow.yml`，发布为 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。先用 `workflow_dispatch / check` 验证，通过后设置仓库变量 `CAPTURE_ENABLED=true`。上游会话异常时可先用 `workflow_dispatch / probe` 在单个 GitHub Runner 验证启动页和试玩会话，不旋转、不采集。正式采集由外部监督器在健康门禁通过后派发 `capture`：workflow 本身只有 `workflow_dispatch`，不使用 push、cron 或结束后的链式派发。使用 20 个 GitHub-hosted Linux 节点，每轮共享 45 分钟预算；单并发组最多保留一个运行和一个等待任务。
 
 `workflow_dispatch / benchmark` 用于确定官方稳定请求间隔。它只调整单节点请求间隔（250/200ms）和本轮预算，每档最多运行 15 分钟并照常保存有效数据；必须逐档、单变量测试，并根据实际新增数据、业务错误、429 和熔断节点决定是否继续。**benchmark 不能提高并发**：`max_claims` 输入已移除，`OAKS_MAX_CLAIMS` 是 workflow 里的字面量 24，任何派发参数都无法放大它。测试期间设置 `BENCHMARK_ENABLED=true` 会阻止定时正式采集。
 

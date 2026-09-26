@@ -208,10 +208,15 @@ function installDurability(): void {
     const code = businessStatusCode(body);
     if (!response.ok) {
       const command = new URL(url).searchParams.get('gsc') ?? 'launch';
+      const errorPage = body.toString('utf8', 0, 16384);
       realLog(JSON.stringify({ phase: 'protocol-http-error', slug, status: response.status,
         command: /^[a-z_]+$/.test(command) ? command : 'unknown',
         businessCode: code && /^[A-Z_]{1,64}$/.test(code) ? code : undefined,
-        json: headers['content-type']?.includes('json') === true }));
+        json: headers['content-type']?.includes('json') === true,
+        cloudflare: /cloudflare/i.test(headers.server ?? ''),
+        challenge: headers['cf-mitigated'] === 'challenge' || /cf-chl-|challenge-platform/.test(errorPage),
+        cloudfront: /cloudfront/i.test(errorPage),
+        accessDenied: /access.?denied|request blocked|forbidden|you have been blocked/i.test(errorPage) }));
     }
     const usable = response.ok && usableResponse(body);
     const settled = rpc('response', {
@@ -219,7 +224,7 @@ function installDurability(): void {
       status: response.status,
       retryAfter: headers['retry-after'] ?? '',
       usable,
-      businessCode: code && code !== 'OK' ? code : undefined,
+      businessCode: code && code !== 'OK' ? code : response.status >= 400 ? `HTTP_${response.status}` : undefined,
     });
     timing.respond += Date.now() - respondStarted;
     if (settled.halted) throw new Error('ACTIONS_HALTED');

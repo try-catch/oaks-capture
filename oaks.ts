@@ -13,7 +13,7 @@ import { CaptureThrottle } from "./src/capture-throttle";
 import { numberOption, selectGames, stringOption } from "./src/cli";
 import { classifyRound, discoverFeatureInventory, FeatureInventory, includeObservedFeatures } from "./src/features";
 import { discoverGame } from "./src/game-definition";
-import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, syncMongoRounds, upsertMongoRound, upsertMongoRounds } from "./src/mongo-store";
+import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, upsertMongoRound, upsertMongoRounds } from "./src/mongo-store";
 import { actionFeatureKey, actionSpinType, command, JSONMap, nextAction, openSession, protocolAction, ProtocolHttpError, ProtocolStatusError, roundBet, roundSpinType, Session } from "./src/protocol";
 import { buildPlayableActions, discoverShop, PlayAction, ShopInventory } from "./src/shop";
 import { validateGameRound } from "./src/validators";
@@ -110,26 +110,21 @@ async function openSessionWithRetry(
   throw lastError;
 }
 
-export async function readDocuments(filename: string): Promise<CapturedDocument[]> {
-  // ponytail: 仍保留历史对象供现有校验/同步复用；若对象堆成为瓶颈再改分批聚合。
-  const documents: CapturedDocument[] = [];
+export async function* readDocuments(filename: string): AsyncGenerator<CapturedDocument> {
   let index = 0;
   for await (const line of ndjsonLines(filename)) {
     index++;
     try {
       const document = JSON.parse(line) as CapturedDocument;
       document.sourceRoundHash = String(document.sourceRoundHash ?? sourceRoundHash(document));
-      documents.push(document);
+      yield document;
     } catch (error) {
       throw new Error(`${filename} 第 ${index} 条记录无法恢复`);
     }
   }
-  return documents;
 }
 
-function countCoverage(documents: CapturedDocument[]): { counts: Record<string, number>; hashes: Set<string> } {
-  const counts: Record<string, number> = {};
-  const hashes = new Set<string>();
+function countCoverage(documents: CapturedDocument[], counts: Record<string, number> = {}, hashes = new Set<string>()): { counts: Record<string, number>; hashes: Set<string> } {
   for (const document of documents) {
     if (hashes.has(document.sourceRoundHash)) continue;
     hashes.add(document.sourceRoundHash);
@@ -153,8 +148,7 @@ function actionKeyFromDocument(document: CapturedDocument): string {
   return "spin";
 }
 
-function collectActionEvidence(documents: CapturedDocument[]): ActionEvidence {
-  const evidence: ActionEvidence = {};
+function collectActionEvidence(documents: CapturedDocument[], evidence: ActionEvidence = {}): ActionEvidence {
   for (const document of documents) {
     const key = actionKeyFromDocument(document);
     const features = (evidence[key] ??= new Set<string>());
@@ -289,20 +283,32 @@ export async function captureGame(
   const outputBase = path.basename(outputName, path.extname(outputName));
   const isDefaultOutput = outputName === `${game.slug}.ndjson`;
   await fs.appendFile(ndjson, "");
-  const priorDocuments = await readDocuments(ndjson);
-  const { counts, hashes } = countCoverage(priorDocuments);
-  const actionEvidence = collectActionEvidence(priorDocuments);
+  const counts: Record<string, number> = {};
+  const hashes = new Set<string>();
+  const actionEvidence: ActionEvidence = {};
+  let priorCount = 0;
+  let lastDocument: CapturedDocument | undefined;
 
   // 模式补量只统计去重后的完整局，不把普通模式数量当作稀有分支覆盖。
   const modeCounts: Record<number, number> = {};
-  for (const document of new Map(priorDocuments.map(doc => [doc.sourceRoundHash, doc])).values()) {
+  // 仅保留哈希/模式摘要；历史完整局逐条校验，避免多百 MB 对象常驻堆。
+  const priorModes = new Map<string, number>();
+  for await (const document of readDocuments(ndjson)) {
+    priorCount++;
+    lastDocument = document;
+    countCoverage([document], counts, hashes);
+    collectActionEvidence([document], actionEvidence);
     if (modeQuota) {
       if (document.gameId !== game.gameId || document.game !== game.slug || document.testOnly === true) throw new Error("模式补量文件含不属于本游戏的样本");
       validateGameRound(game, document.data, Number(document.bet));
     }
     const type = roundSpinType(document.data, Number(document.buy ?? 0));
+    const previous = priorModes.get(document.sourceRoundHash);
+    if (previous !== undefined) modeCounts[previous]--;
+    priorModes.set(document.sourceRoundHash, type);
     modeCounts[type] = (modeCounts[type] ?? 0) + 1;
   }
+  priorModes.clear();
   let mongo: MongoClient | undefined;
   let collection: any;
   const mongoBatch: Record<string, unknown>[] = [];
@@ -324,7 +330,19 @@ export async function captureGame(
     await mongo.connect();
     collection = mongo.db(database).collection(MONGO_COLLECTION);
     await ensureMongoIndexes(collection);
-    const repaired = options.skipMongoSync ? 0 : await syncMongoRounds(collection, priorDocuments);
+    let repaired = 0;
+    if (!options.skipMongoSync) {
+      if (await collection.estimatedDocumentCount() === hashes.size) {
+        if (lastDocument) await upsertMongoRound(collection, lastDocument);
+      } else {
+        let batch: CapturedDocument[] = [];
+        for await (const document of readDocuments(ndjson)) {
+          batch.push(document);
+          if (batch.length >= 25) { repaired += await upsertMongoRounds(collection, batch, 25); batch = []; }
+        }
+        repaired += await upsertMongoRounds(collection, batch, 25);
+      }
+    }
     if (modeQuota && captureRuntime) await syncModeCountsFromMongo(collection, modeCounts);
     console.log(`[Mongo] 已连接 ${database}.${MONGO_COLLECTION}${repaired ? `，批量修复 ${repaired} 条历史数据` : "，历史数量一致无需重写"}`);
   } catch (error) {
@@ -341,15 +359,16 @@ export async function captureGame(
   await fs.writeFile(path.join(outputDir, "start-template.json"), `${JSON.stringify(sanitizeProtocolData(session.start), null, 2)}\n`);
   const inventory = await loadInventory(game, session, outputDir);
   let recoveredFeatures = false;
-  for (const document of priorDocuments) recoveredFeatures = includeObservedFeatures(inventory, document.data) || recoveredFeatures;
+  for await (const document of readDocuments(ndjson)) recoveredFeatures = includeObservedFeatures(inventory, document.data) || recoveredFeatures;
   if (recoveredFeatures) await fs.writeFile(path.join(outputDir, "feature-inventory.json"), JSON.stringify(inventory));
   captureRuntime?.syncFiles();
   const required = [...new Set(["base-loss", "base-or-feature-win", ...(explicitRequired.length ? explicitRequired : inventory.required)])].sort();
   const checkpointPath = path.join(outputDir, isDefaultOutput ? "capture-checkpoint.json" : `${outputBase}-checkpoint.json`);
-  let captured = priorDocuments.length;
+  let captured = priorCount;
   let newCaptured = 0;
   let retries = 0;
-  let lastCompletedHash = priorDocuments.at(-1)?.sourceRoundHash;
+  let lastCompletedHash = lastDocument?.sourceRoundHash;
+  lastDocument = undefined;
   let attempted = 0;
   let attemptedAction: PlayAction | undefined;
   const omitBuyFactor = new Set<number>();

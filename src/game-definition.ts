@@ -4,6 +4,13 @@ import { BuyMode, GameDiscovery, RuntimeTarget } from "./catalog";
 
 export type JSONMap = Record<string, any>;
 
+// 官网试玩 iframe 的跨域 XHR 会自动携带来源；Node 请求需显式保持一致。
+export const DEMO_REQUEST_HEADERS = {
+  "content-type": "text/plain",
+  origin: "https://3oaks.com",
+  referer: "https://3oaks.com/",
+};
+
 function absoluteUrl(value: string, base = "https://3oaks.com"): string {
   if (!value) return "";
   return new URL(value.startsWith("//") ? `https:${value}` : value, base).href;
@@ -111,7 +118,7 @@ async function protocolCommand(
 ): Promise<JSONMap> {
   const response = await fetcher(`${endpoint}?gsc=${encodeURIComponent(command)}`, {
     method: "POST",
-    headers: { "content-type": "text/plain", ...(cookie ? { cookie } : {}) },
+    headers: { ...DEMO_REQUEST_HEADERS, ...(cookie ? { cookie } : {}) },
     body: JSON.stringify({ command, request_id: crypto.randomUUID().replaceAll("-", ""), ...extra,
       client_command_timestamp: Date.now() }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),

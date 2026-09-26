@@ -70,6 +70,8 @@ test('官网启动配置直接连接官方试玩 API，不请求旧测试站', a
       });
       const body = JSON.parse(String(options?.body));
       assert.equal(new Headers(options?.headers).has('cookie'), false);
+      assert.equal(new Headers(options?.headers).get('origin'), 'https://3oaks.com');
+      assert.equal(new Headers(options?.headers).get('referer'), 'https://3oaks.com/');
       assert.ok(Math.abs(Date.now() - body.client_command_timestamp) < 1000);
       if (body.command === 'login') return Response.json({status: {code: 'OK'}, session_id: 'session', user: {huid: 'user'}});
       return Response.json({status: {code: 'OK'}, settings: {}, context: {}});

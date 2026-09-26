@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { REQUEST_TIMEOUT_MS } from "../config";
 import { GameDiscovery } from "./catalog";
-import { discoverGame, parsePlayConfig, resolveDemoEndpoint } from "./game-definition";
+import { DEMO_REQUEST_HEADERS, discoverGame, parsePlayConfig, resolveDemoEndpoint } from "./game-definition";
 import type { PlayAction } from "./shop";
 
 export type JSONMap = Record<string, any>;
@@ -112,7 +112,7 @@ export async function command(endpoint: string, cookie: string, name: string, ex
     client_command_timestamp: Date.now() });
   const response = await fetch(`${endpoint}?gsc=${encodeURIComponent(name)}`, {
     method: "POST",
-    headers: { "content-type": "text/plain", ...(cookie ? { cookie } : {}) },
+    headers: { ...DEMO_REQUEST_HEADERS, ...(cookie ? { cookie } : {}) },
     body,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });

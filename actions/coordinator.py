@@ -709,7 +709,10 @@ class Store:
             if now >= state['deadline']:
                 return {'stop': True}
             if now < state['until']:
-                return {'stop': True, 'until': state['until']}
+                # 短时全局冷却应保留已登录会话，避免所有 worker 退出后重复登录又触发 429。
+                if state['until'] >= state['deadline']:
+                    return {'stop': True, 'until': state['until']}
+                return {'wait': min(30_000, state['until'] - now)}
             # FIFO 防止网络更快的节点反复抢占；只清理未获准请求的失联等待项。
             waiters = [item for item in state.get('waiters', []) if now - item['seen'] < 60_000]
             current = next((item for item in waiters if item['key'] == key), None)

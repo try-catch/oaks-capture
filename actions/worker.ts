@@ -187,7 +187,7 @@ function installDurability(): void {
       if (permit.stop) throw new Error(permit.until > Date.now() ? 'ACTIONS_RATE_LIMIT' : 'ACTIONS_BUDGET');
       if (permit.granted) break;
       timing.polls += 1;
-      await new Promise(resolve => setTimeout(resolve, Math.min(5000, permit.wait)));
+      await new Promise(resolve => setTimeout(resolve, Math.min(30_000, permit.wait)));
     }
     // 不设置 HTTP/SOCKS 代理：真实 fetch 在 GitHub-hosted Runner 内执行。
     const fetchStarted = Date.now();

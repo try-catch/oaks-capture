@@ -26,9 +26,9 @@ test("CAPTURE_ENABLED 是硬门禁，且推送触发只认专用文件", () => {
 test("单个节点按线程数并发，节点数与矩阵一致", () => {
   assert.match(workflow, /OAKS_THREADS:\s*'8'/);
   assert.match(workflow, /OAKS_NODES:\s*'20'/);
-  // 在 24 会话硬上限内减少固定空等；429 仍由 CaptureThrottle 切回保守节奏。
-  assert.match(workflow, /OAKS_SPIN_DELAY_MS:\s*'500'/);
-  assert.match(workflow, /OAKS_NODE_SPACING_MS:\s*'200'/);
+  // 官网出现跨出口 429 后降低单会话速率，同时保留 24 会话硬上限。
+  assert.match(workflow, /OAKS_SPIN_DELAY_MS:\s*'1500'/);
+  assert.match(workflow, /OAKS_NODE_SPACING_MS:\s*'500'/);
   assert.match(workflow, /OAKS_SHARDS_PER_GAME:\s*'2'/);
   assert.match(workflow, /OAKS_CLAIM_START_SPACING_MS:\s*'15000'/);
   assert.match(workflow, /max-parallel:\s*20/);
@@ -65,8 +65,8 @@ test("同时活跃的官方会话数受限，不能等于线程总数", () => {
 
 test("begin 把线程与节点拓扑交给协调器作为并发预算", () => {
   assert.match(worker, /maxInFlight:\s*threads \* nodes/);
-  // 单线程节点只要一次限速就足以判定出口被封控，因此熔断阈值随线程数收敛。
-  assert.match(worker, /throttleLimit:\s*Math\.min\(numberFromEnv\('OAKS_THROTTLE_LIMIT', 4\), Math\.ceil\(threads \/ 2\)\)/);
+  // 双线程节点须两条线程都限速才熔断，不能一次 429 就丢弃整节点租约。
+  assert.match(worker, /throttleLimit:\s*Math\.min\(threads, numberFromEnv\('OAKS_THROTTLE_LIMIT', 4\), Math\.max\(2, Math\.ceil\(threads \/ 2\)\)\)/);
   assert.match(coordinator, /DEFAULT_THROTTLE_LIMIT = 4/);
 });
 

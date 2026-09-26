@@ -417,7 +417,8 @@ async function main(): Promise<void> {
       threads,
       nodes,
       nodeMs: numberFromEnv('OAKS_NODE_SPACING_MS', 250),
-      throttleLimit: Math.min(numberFromEnv('OAKS_THROTTLE_LIMIT', 4), Math.ceil(threads / 2)),
+      // 双线程出口不能因首个 429 就整节点熔断；全局 Retry-After 仍由协调器执行。
+      throttleLimit: Math.min(threads, numberFromEnv('OAKS_THROTTLE_LIMIT', 4), Math.max(2, Math.ceil(threads / 2))),
       maxInFlight: threads * nodes,
       // 同时活跃的官方游戏会话数必须限制：demo 后端在大量并发会话时返回 GAME_REOPENED。
       maxClaims: numberFromEnv('OAKS_MAX_CLAIMS', 24),

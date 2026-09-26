@@ -148,6 +148,11 @@ class RecoveryTests(unittest.TestCase):
         atomic(self.store.state_path, state)
         retried = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)
         self.assertEqual((retried['slug'], retried['specialOnly']), ('one', True))
+        reserved = self.store.call({'op': 'reserve_modes', 'run': '100-1', 'worker': '2', 'slug': 'one',
+                                    'counts': {'0': 0, '1': 0}, 'targets': {'0': 100000, '1': 10000}},
+                                   check_legacy=False)
+        self.assertGreater(reserved['targets']['1'], 0)
+        self.assertEqual(self.call('status')['modeQuotas']['one']['targets']['1'], 10000)
 
     def test_unavailable_requires_two_different_nodes(self):
         atomic(self.root / 'games/registry.json', {'games': [
@@ -280,6 +285,15 @@ class RecoveryTests(unittest.TestCase):
         atomic(self.store.state_path, state)
         self.assertIn('wait', self.call('permit', key='a' * 64, request={}))
         self.assertTrue(self.permit('2', 'two', 'b' * 64)['granted'])
+
+    def test_two_thread_node_survives_first_429(self):
+        self.call('end')
+        self.call('begin', threads=2, nodes=2, maxClaims=4, throttleLimit=2)
+        slug = self.call('claim')['slug']
+        self.throttle('1', slug, self.key)
+        state = self.call('status')
+        self.assertNotIn('1', state['halted'])
+        self.assertEqual(state['claims'][slug]['status'], 'running')
 
     def test_two_node_throttle_pauses_all_workers_across_runs(self):
         self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)

@@ -39,11 +39,11 @@ env:
   # 单节点线程数、节点数、请求间隔必须与服务商书面授权允许的并发一致。
   OAKS_THREADS: '8'
   OAKS_NODES: '20'
-  OAKS_NODE_SPACING_MS: '200'
+  OAKS_NODE_SPACING_MS: '500'
   OAKS_THROTTLE_LIMIT: '6'
   OAKS_DEADLINE_MINUTES: '45'
-  # 每局固定等待从 1 秒降到 0.5 秒；429 仍按 Retry-After 退避并切到 5 秒保守节奏。
-  OAKS_SPIN_DELAY_MS: '500'
+  # 官网入口出现跨出口 429 后先保守降速；仍按 Retry-After 退避，不放宽并发门禁。
+  OAKS_SPIN_DELAY_MS: '1500'
   # 24 是历史压测的吞吐最优点；60 个会话会让共享测试服连续触发 CPU PSI 保护停轮。
   # 每节点仍只按预算启动 2 个 worker，全局活跃游戏硬限制为 24。
   OAKS_MAX_CLAIMS: '24'

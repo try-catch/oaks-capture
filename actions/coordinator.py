@@ -558,10 +558,11 @@ class Store:
                 raise ValueError('非法模式配额')
             if not targets or any(int(mode) < 0 for mode in targets) or set(counts) - set(targets):
                 raise ValueError('非法模式配额')
-            quota = state.setdefault('modeQuotas', {}).setdefault(slug, {
-                'counts': {}, 'targets': targets, 'reservations': {}, 'specialComplete': False,
-            })
-            if quota.get('targets') != targets:
+            quota = state.setdefault('modeQuotas', {}).setdefault(slug, {})
+            # 登录前失败可能只留下 unavailable/retryable 元数据；首次成功预订才冻结模式配额。
+            if 'targets' not in quota:
+                quota.update(counts={}, targets=targets, reservations={}, specialComplete=False)
+            elif quota['targets'] != targets:
                 raise ValueError('同一游戏模式配额不一致')
             for mode, value in counts.items():
                 quota['counts'][mode] = max(int(quota['counts'].get(mode, 0)), value)

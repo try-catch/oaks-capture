@@ -2,6 +2,8 @@
 
 公共仓库仅包含采集代码、测试和目录定义。NDJSON、凭据、原始响应及未完成局只保存在测试服，禁止上传 artifact。
 
+2026-09-26 同一个 GitHub Runner 对照确认：Node 的 Grand login 返回 Cloudflare 403，而原生 Chromium 的 login/start 都为 200/OK。因此正式采集和 probe 使用 `OAKS_BROWSER_TRANSPORT=1`，复用已安装的 Playwright，让真实 Chromium 执行官方网络请求；每个 worker 独立浏览器上下文。配额、持久化、请求许可、429/Retry-After 退避不变。不伪造 UA、不注入其它会话 Cookie、不使用代理。`diagnose.yml` 仍保留 Node 与浏览器对照，不作为正式采集运行。
+
 采集 workflow 位于 `actions/workflow.yml`，发布为 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。先用 `workflow_dispatch / check` 验证，通过后设置仓库变量 `CAPTURE_ENABLED=true`。上游会话异常时可先用 `workflow_dispatch / probe` 在单个 GitHub Runner 验证启动页和试玩会话，不旋转、不采集。正式采集由外部监督器在健康门禁通过后派发 `capture`：workflow 本身只有 `workflow_dispatch`，不使用 push、cron 或结束后的链式派发。使用 20 个 GitHub-hosted Linux 节点，每轮共享 45 分钟预算；单并发组最多保留一个运行和一个等待任务。
 
 `workflow_dispatch / benchmark` 用于确定官方稳定请求间隔。它只调整单节点请求间隔（250/200ms）和本轮预算，每档最多运行 15 分钟并照常保存有效数据；必须逐档、单变量测试，并根据实际新增数据、业务错误、429 和熔断节点决定是否继续。**benchmark 不能提高并发**：`max_claims` 输入已移除，`OAKS_MAX_CLAIMS` 是 workflow 里的字面量 24，任何派发参数都无法放大它。测试期间设置 `BENCHMARK_ENABLED=true` 会阻止定时正式采集。
@@ -10,9 +12,9 @@
 
 未拿到租约的节点在满额时按指数退避等待：`CLAIM_WAIT_BASE_MS` 1500 毫秒起、逐次翻倍、上限 `CLAIM_WAIT_MAX_MS` 30 秒，客户端原样遵守。稳定态下空闲节点几乎不再产生 claim 流量；固定 3 秒轮询会让 14 个空闲节点形成约 5 次/秒的空转 claim（各带一次 SSH 往返），属于控制面风暴，不得改回。`status` 返回的 `claimBackoff` 汇总了正在退避的 worker 数与最大尝试次数，可用于确认控制面没有退化。
 
-24 个活跃会话保持单会话 0.5 秒节奏。吞吐继续下降时先检查官方响应时延、Mongo 写入和门禁指标；只有连续多轮出现同型资源保护停轮，才允许按实测结果收紧这个硬上限。
+24 个活跃会话保持单会话 1.8 秒节奏。吞吐继续下降时先检查官方响应时延、Mongo 写入和门禁指标；只有连续多轮出现同型资源保护停轮，才允许按实测结果收紧这个硬上限。
 
-官方请求的节奏分两层：线程自身的 `OAKS_SPIN_DELAY_MS`（部署默认 0.5 秒，代码默认 2 秒）决定单个会话的请求间隔，节点层的 `OAKS_NODE_SPACING_MS`（部署默认 200 毫秒，代码默认 250 毫秒）保证同一出口不会在极短时间内连打。每个 worker 都通过随机启动 token 独立登录，获得自己的会话与试玩用户，不在节点间共享 `session_id`/`huid`。请求许可按到达顺序发放，正在退避的出口不会占用队首拖慢其它出口；队首只是在自己节点的间隔里时返回精确剩余毫秒，避免固定轮询压低整体节奏。
+官方请求的节奏分两层：线程自身的 `OAKS_SPIN_DELAY_MS`（部署默认 1.8 秒，代码默认 2 秒）决定单个会话的请求间隔，节点层的 `OAKS_NODE_SPACING_MS`（部署默认 800 毫秒，代码默认 250 毫秒）保证同一出口不会在极短时间内连打。每个 worker 都通过随机启动 token 独立登录，获得自己的会话与试玩用户，不在节点间共享 `session_id`/`huid`。请求许可按到达顺序发放，正在退避的出口不会占用队首拖慢其它出口；队首只是在自己节点的间隔里时返回精确剩余毫秒，避免固定轮询压低整体节奏。
 
 限速分两种反应。单个出口被限速时，只有该出口按官方 `Retry-After` 退避，其它出口继续工作。同一窗口（120 秒）内有 2 个及以上出口都被限速，说明是服务商整体限制，所有节点一起暂停；该截止时间持久化在 `output/.actions/queue.json`，后续运行继续遵守。
 
@@ -20,7 +22,7 @@
 
 会话恢复：官方把业务结果放在 HTTP 200 响应的 `status.code` 里，`GAME_REOPENED` 这类码表示当前会话已被重开。实测 7643 次请求里有 94 次是 `GAME_REOPENED`、19 次 `SERVER_ERROR`，属于正常运营事件，不是限速。出现这类码时只作废当前这一局（丢弃未完成帧）并重新登录，不再让整个游戏失败；只有结果未知的请求才继续走“隔离、禁止自动重放”的人工核实路径。协调器只重放调用方确认为业务成功的响应，业务失败的 200 会被重新请求，避免某一局被永久卡死。
 
-每个游戏按代码中已核实的官方模式定义验收：先补每个购买模式和每个加注模式各 10000 条，再补普通模式 100000 条；没有购买和加注入口的游戏直接采普通模式。当前启动地址由 `https://www.wxgame99.com/` 的 `game_link` 接口生成，协议请求走其返回页面配套的 3 OAKS API 代理。目录中不被新站支持的游戏只标记不可用，不伪造数据。工期取决于服务商允许的并发会话数，不要按线程数估算。
+每个游戏按代码中已核实的官方模式定义验收：先补每个购买模式和每个加注模式各 10000 条，再补普通模式 100000 条；没有购买和加注入口的游戏直接采普通模式。启动配置直接来自 `https://3oaks.com/api/v1/games/<slug>/play?lang=en`，协议请求走该页面声明的官方试玩 API。官网暂不可用的游戏只标记不可用，不伪造数据。工期取决于服务商允许的并发会话数，不要按线程数估算。
 
 Secrets：`OAKS_SSH_KEY`、`OAKS_KNOWN_HOSTS`、`OAKS_SSH_HOST`、`OAKS_MONGO_HOST`、`OAKS_MONGO_URI`。Mongo URI 指向 Runner 的本地 SSH 隧道端口 27018，禁止开放数据库公网端口。SSH 主机密钥必须来自已核实的主机记录。采集 Runner 禁止配置任何 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 出口代理，也不轮换账号：节点只能是 GitHub-hosted Runner。
 

@@ -2,7 +2,9 @@
 
 公共仓库仅包含采集代码、测试和目录定义。NDJSON、凭据、原始响应及未完成局只保存在测试服，禁止上传 artifact。
 
-采集 workflow 位于 `actions/workflow.yml`，发布为 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。先用 `workflow_dispatch / check` 验证，通过后设置仓库变量 `CAPTURE_ENABLED=true`。正式采集由外部监督器在健康门禁通过后派发 `capture`：workflow 本身只有 `workflow_dispatch`，不使用 push、cron 或结束后的链式派发。使用 20 个 GitHub-hosted Linux 节点，每轮共享 45 分钟预算；单并发组最多保留一个运行和一个等待任务。
+2026-09-26 同一个 GitHub Runner 对照确认：Node 的 Grand login 返回 Cloudflare 403，而原生 Chromium 的 login/start 都为 200/OK。因此正式采集和 probe 使用 `OAKS_BROWSER_TRANSPORT=1`，复用已安装的 Playwright，让真实 Chromium 执行官方网络请求；每个 worker 独立浏览器上下文。配额、持久化、请求许可、429/Retry-After 退避不变。不伪造 UA、不注入其它会话 Cookie、不使用代理。`diagnose.yml` 仍保留 Node 与浏览器对照，不作为正式采集运行。
+
+采集 workflow 位于 `actions/workflow.yml`，发布为 `.github/workflows/capture.yml`。先取得 3 OAKS 对目标、频率和 GitHub Runner 出口的书面授权，再配置 Secrets；`OAKS_PROVIDER_AUTHORIZED` 只有在授权仍有效时才设为 `true`。先用 `workflow_dispatch / check` 验证，通过后设置仓库变量 `CAPTURE_ENABLED=true`。上游会话异常时可先用 `workflow_dispatch / probe` 在单个 GitHub Runner 验证启动页和试玩会话，不旋转、不采集。正式采集由外部监督器在健康门禁通过后派发 `capture`：workflow 本身只有 `workflow_dispatch`，不使用 push、cron 或结束后的链式派发。使用 20 个 GitHub-hosted Linux 节点，每轮共享 45 分钟预算；单并发组最多保留一个运行和一个等待任务。
 
 `workflow_dispatch / benchmark` 用于确定官方稳定请求间隔。它只调整单节点请求间隔（250/200ms）和本轮预算，每档最多运行 15 分钟并照常保存有效数据；必须逐档、单变量测试，并根据实际新增数据、业务错误、429 和熔断节点决定是否继续。**benchmark 不能提高并发**：`max_claims` 输入已移除，`OAKS_MAX_CLAIMS` 是 workflow 里的字面量 24，任何派发参数都无法放大它。测试期间设置 `BENCHMARK_ENABLED=true` 会阻止定时正式采集。
 
@@ -10,9 +12,9 @@
 
 未拿到租约的节点在满额时按指数退避等待：`CLAIM_WAIT_BASE_MS` 1500 毫秒起、逐次翻倍、上限 `CLAIM_WAIT_MAX_MS` 30 秒，客户端原样遵守。稳定态下空闲节点几乎不再产生 claim 流量；固定 3 秒轮询会让 14 个空闲节点形成约 5 次/秒的空转 claim（各带一次 SSH 往返），属于控制面风暴，不得改回。`status` 返回的 `claimBackoff` 汇总了正在退避的 worker 数与最大尝试次数，可用于确认控制面没有退化。
 
-24 个活跃会话保持单会话 0.5 秒节奏。吞吐继续下降时先检查官方响应时延、Mongo 写入和门禁指标；只有连续多轮出现同型资源保护停轮，才允许按实测结果收紧这个硬上限。
+24 个活跃会话保持单会话 1.8 秒节奏。吞吐继续下降时先检查官方响应时延、Mongo 写入和门禁指标；只有连续多轮出现同型资源保护停轮，才允许按实测结果收紧这个硬上限。
 
-官方请求的节奏分两层：线程自身的 `OAKS_SPIN_DELAY_MS`（部署默认 0.5 秒，代码默认 2 秒）决定单个会话的请求间隔，节点层的 `OAKS_NODE_SPACING_MS`（部署默认 200 毫秒，代码默认 250 毫秒）保证同一出口不会在极短时间内连打。每个 worker 都通过随机启动 token 独立登录，获得自己的会话与试玩用户，不在节点间共享 `session_id`/`huid`。请求许可按到达顺序发放，正在退避的出口不会占用队首拖慢其它出口；队首只是在自己节点的间隔里时返回精确剩余毫秒，避免固定轮询压低整体节奏。
+官方请求的节奏分两层：线程自身的 `OAKS_SPIN_DELAY_MS`（部署默认 1.8 秒，代码默认 2 秒）决定单个会话的请求间隔，节点层的 `OAKS_NODE_SPACING_MS`（部署默认 800 毫秒，代码默认 250 毫秒）保证同一出口不会在极短时间内连打。每个 worker 都通过随机启动 token 独立登录，获得自己的会话与试玩用户，不在节点间共享 `session_id`/`huid`。请求许可按到达顺序发放，正在退避的出口不会占用队首拖慢其它出口；队首只是在自己节点的间隔里时返回精确剩余毫秒，避免固定轮询压低整体节奏。
 
 限速分两种反应。单个出口被限速时，只有该出口按官方 `Retry-After` 退避，其它出口继续工作。同一窗口（120 秒）内有 2 个及以上出口都被限速，说明是服务商整体限制，所有节点一起暂停；该截止时间持久化在 `output/.actions/queue.json`，后续运行继续遵守。
 

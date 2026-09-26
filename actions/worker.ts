@@ -6,6 +6,7 @@ import { spawnSync, fork } from 'node:child_process';
 import { installCaptureRuntime, PendingRound } from '../src/capture-runtime';
 import { CoordinatorChannel } from '../src/coordinator-channel';
 import { restoreData } from '../src/restore-data';
+import { browserFetch, closeBrowserTransport } from '../src/browser-transport';
 
 const root = path.resolve(__dirname, '..');
 const run = `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
@@ -169,7 +170,7 @@ function installDurability(): void {
     syncFiles,
     shouldStop: stopped,
   });
-  const officialFetch = globalThis.fetch;
+  const officialFetch = process.env.OAKS_BROWSER_TRANSPORT === '1' ? browserFetch : globalThis.fetch;
   globalThis.fetch = async (input, options = {}) => {
     if (stopped()) throw new Error('ACTIONS_BUDGET');
     const url = String(input);
@@ -426,12 +427,12 @@ async function main(): Promise<void> {
       }
       throw error;
     } finally {
-      try { if (owned) rpc('end'); } finally { channel.close(); }
+      try { if (owned) rpc('end'); } finally { await closeBrowserTransport(); channel.close(); }
     }
     return;
   }
   // 常驻通道会吊住事件循环，每个模式结束时都必须显式收尾，否则进程跑完不退出。
-  if (mode === 'thread') { try { await runThread(); } finally { channel.close(); } return; }
+  if (mode === 'thread') { try { await runThread(); } finally { await closeBrowserTransport(); channel.close(); } return; }
   if (mode === 'begin') {
     requireGithubHosted();
     requireProviderAuthorization();

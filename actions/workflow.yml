@@ -37,6 +37,8 @@ env:
   OAKS_MONGO_HOST: ${{ secrets.OAKS_MONGO_HOST }}
   OAKS_MONGO_URI: ${{ secrets.OAKS_MONGO_URI }}
   OAKS_PROVIDER_AUTHORIZED: ${{ secrets.OAKS_PROVIDER_AUTHORIZED }}
+  # 同节点实测 Node 被拒绝而原生 Chromium 可用；原有许可、限速和配额仍在外层执行。
+  OAKS_BROWSER_TRANSPORT: '1'
   # 单节点线程数、节点数、请求间隔必须与服务商书面授权允许的并发一致。
   OAKS_THREADS: '8'
   OAKS_NODES: '20'
@@ -100,6 +102,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
       - run: python3 actions/setup-ssh.py
       - run: node -r ts-node/register actions/worker.ts probe
         env:
@@ -126,6 +129,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
       - run: python3 actions/setup-ssh.py
       - name: Confirm GitHub-hosted Linux execution
         run: |

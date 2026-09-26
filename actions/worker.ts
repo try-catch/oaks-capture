@@ -365,7 +365,7 @@ async function supervise(): Promise<void> {
 
 async function main(): Promise<void> {
   const mode = process.argv[2];
-  if (mode === 'probe') {
+  if (mode === 'probe' || mode === 'compare') {
     requireGithubHosted();
     requireProviderAuthorization();
     egress = await discoverEgress();
@@ -377,7 +377,8 @@ async function main(): Promise<void> {
       }
       const begun = rpc('begin', { githubToken: process.env.OAKS_GITHUB_TOKEN,
         threads: 1, nodes: 1, nodeMs: 3000, throttleLimit: 1,
-        maxInFlight: 1, maxClaims: 1, deadlineMinutes: 3 });
+        maxInFlight: 1, maxClaims: 1, deadlineMinutes: mode === 'compare' ? 5 : 3,
+        ...(mode === 'compare' ? { preferredGames: ['grand'] } : {}) });
       owned = true;
       deadline = begun.deadline;
       const claim = rpc('claim');
@@ -401,14 +402,21 @@ async function main(): Promise<void> {
       const { openSession, ProtocolHttpError, ProtocolStatusError } = await import('../src/protocol');
       const game = registry.games.find(game => game.slug === slug);
       if (!game?.discovery) throw new Error('缺少已核实定义');
+      let nodeError: unknown;
       try { await openSession(game.discovery); }
       catch (error) {
         const code = error instanceof ProtocolStatusError && /^[A-Z_]{1,64}$/.test(error.code) ? error.code :
           error instanceof ProtocolHttpError ? error.message : 'SESSION_FAILED';
         console.log(JSON.stringify({ phase: 'upstream-probe', stage: 'session-error', slug, code,
           status: error instanceof ProtocolHttpError ? error.status : undefined }));
-        throw error;
+        if (mode !== 'compare' || !(error instanceof ProtocolHttpError) || error.status !== 403) throw error;
+        nodeError = error;
       }
+      if (mode === 'compare') {
+        const { probeBrowserSession } = await import('./browser-probe');
+        await probeBrowserSession(slug, rpc);
+      }
+      if (nodeError) throw nodeError;
       console.log(JSON.stringify({ phase: 'upstream-probe', stage: 'session-ready', slug }));
       rpc('done', { status: 'paused', count: claim.baselineCount ?? 0 });
     } catch (error) {

@@ -1,4 +1,5 @@
 name: 3 OAKS upstream diagnostic
+run-name: 3 OAKS 同节点 Node 与 Chromium 会话对照
 on:
   workflow_dispatch:
 permissions:
@@ -29,6 +30,7 @@ jobs:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run check
+      - run: npx playwright install --with-deps chromium
       - run: python3 actions/setup-ssh.py
       - run: node -r ts-node/register actions/worker.ts check
-      - run: node -r ts-node/register actions/worker.ts probe
+      - run: node -r ts-node/register actions/worker.ts compare

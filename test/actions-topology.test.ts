@@ -90,7 +90,7 @@ test("熔断节点交回租约并停止真实请求，但保留已落盘数据",
   assert.match(coordinator, /len\(threads\) >= state\['topology'\]\['throttleLimit'\]/);
   assert.match(coordinator, /self\.release_node\(state, node\)/);
   assert.match(worker, /ACTIONS_HALTED/);
-  assert.match(worker, /租约已交回，保留已落盘数据/);
+  assert.match(worker, /状态回写失败，需协调器核对租约；保留已落盘数据/);
 });
 
 test("采集 Runner 仍然禁止代理出口并强制 GitHub-hosted", () => {

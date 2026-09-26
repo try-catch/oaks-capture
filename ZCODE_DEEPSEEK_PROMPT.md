@@ -8,7 +8,7 @@
 
 1. 官方请求只能由 GitHub-hosted Linux Runner 发出。不得在本机或测试服直接采集，不得使用代理、指定地区、轮换账号或主动轮换出口。
 2. 允许的动作只有：查询 GitHub Actions、仓库变量、测试服协调器/MongoDB 完成量；在门禁要求时单独补一个缺失索引；满足条件时派发一次现有 `capture.yml`；**以及在下文"运行期健康介入"判定失守时取消在途运行**。除这一项保护性取消外，不得取消、重跑或删除 GitHub 运行，不得修改代码。
-3. 公开仓库 `main` 必须包含当前修复基线。在人工压测完成前保持 `CAPTURE_ENABLED=false`；收到恢复指令后才设为 `true`，同时保持 `BENCHMARK_ENABLED=false`。正式 workflow 固定最多 24 个活跃游戏/Mongo 写入者：`OAKS_MAX_CLAIMS` 是字面量 `'24'`，不得被派发参数放大，不得派发 benchmark。单会话间隔 500ms，单节点请求间隔 200ms；429 仍必须按官方 `Retry-After` 退避，不能继续降低间隔。
+3. 公开仓库 `main` 必须包含当前修复基线；保留现有 `CAPTURE_ENABLED` 门禁，不自行更改仓库变量，保持 `BENCHMARK_ENABLED=false`。正式 workflow 固定最多 24 个活跃游戏/Mongo 写入者：`OAKS_MAX_CLAIMS` 是字面量 `'24'`，不得被派发参数放大，不得派发 benchmark。单会话间隔 500ms，单节点请求间隔 200ms；429 仍必须按官方 `Retry-After` 退避，不能继续降低间隔。
 4. 每节点 worker 子进程数由 `activeThreads()` 收敛为 `min(OAKS_THREADS, ceil(maxClaims / nodes))`：20 节点 × 24 会话时每节点 fork 2 个子进程，竞争全局 24 个游戏租约。购买/加注游戏最多两个不同 Runner 节点分片，`OAKS_SHARDS_PER_GAME` 固定为 `'2'`，协调器原子分配剩余配额；总会话数仍不得超过 24。不得绕过它直接使用授权线程数，避免回到旧版 20×8=160 条控制通道。
 5. 满额 claim 由协调器指数退避（`CLAIM_WAIT_BASE_MS` 1500ms 起，上限 `CLAIM_WAIT_MAX_MS` 30s），客户端原样遵守。不得改回固定 3 秒轮询：那会让未拿到租约的节点形成控制面风暴，在已过载的测试服上叠加约 5 次/秒的空转 claim 与 SSH 往返。
 6. `PLAYER_LOCKOUT` 且消息声明 jurisdiction/legal reasons 时属于该 GitHub Runner 的地区限制。记录 Runner 和游戏并停止该节点，其他节点继续；后续轮次仍可接受 GitHub 正常随机分配的新 Runner，但不得使用代理、指定地区、轮换账号或主动轮换出口。单轮受影响节点少于 10/20 时不构成全局停采条件，达到或超过一半才停止整轮并通知用户。
@@ -37,17 +37,14 @@
 
 ## 每次执行（每 20 分钟）
 
-### 2026-09-19 上游入口故障与恢复（优先级最高）
+### 2026-09-26 官网试玩入口恢复（优先级最高）
 
-- 恢复 capture 后，每款游戏必须先通过官方 launch/login/start 并出现 `phase=session-ready`，才允许该游戏 spin。404/410 或 GAME_NOT_ALLOWED 只把当前游戏标记 unavailable 并继续认领下一款；401/403、PLAYER_LOCKOUT、429 或全局健康门禁仍按安全规则停止/等待，不能降级为跳过。监督结论必须分别统计 session-ready、unavailable、failed，不能把跳过游戏算成采集成功。
-- 真实故障基线：capture run 35425587169 全部 60 租约失败，360 次响应、零新增；单节点诊断 35435650848 于香港时间 17:47 在 GitHub-hosted Runner 证实官网 home=200、catalog=200、launch=404。不是定时器停机，也不能把代码提交当成上游已修复。
-- 维持本来的每 20 分钟健康检查。当前同一 404 故障未恢复时，不再派发 20 节点 capture；不清除 Retry-After、不更换账号/代理/指定出口。
-- 为避免只能等人工宣布恢复，允许在完整健康门禁、限流和队列锁检查通过后，最多每 60 分钟派发一次现有 diagnose.yml（首个基准为 35435650848）。用 GitHub API 的诊断运行 created_at 判定间隔，查不到记录则不猜测；capture.yml 与 diagnose.yml 的所有在途运行都必须纳入互斥检查。
-- 诊断只访问固定官方首页/目录/启动入口，入口成功后检查正常登录/start，不 spin、不写采集数据。只认可升级后诊断日志含 stage=session-ready 且 conclusion=success 为入口与会话恢复证据；旧诊断 35435650848 的 success 仅表示诊断程序执行完成，启动页实际 404，绝不是恢复。
-- 若诊断为 404/410，则维持健康监督并等待下一次允许的诊断；若出现 401/403、GAME_NOT_ALLOWED 或 PLAYER_LOCKOUT，则停止自动上游探测和采集，通知用户核实入口/服务商授权，不能靠定时换 Runner 验证授权绕过。记录最后一次具体诊断 run，不反复下载历史日志。
-- session-ready 后重新完成两次间隔至少 30 秒的完整健康检查，确认两个 workflow 均无在途运行、owner=null、冷却已过、唯一索引完整，再自动派发一次 capture 恢复验证。若仍系统性失败则据新证据停派，不盲目反复。
-- 诊断的 begin/end 会重置协调器本轮 metrics；诊断的零数据和 paused claim 不代表 capture 产出或完成。采集结论依据最近 capture run 与 Mongo/NDJSON 增量，禁止拿诊断覆盖的 metrics 误判。
-- 正常等待保持安静；新故障、需要授权处理、恢复实际写入或全部完成时才通知。诊断由同一 ZCode 定时任务监督，不新建任何定时器。
+- 当前公开代码直接从 `https://3oaks.com/api/v1/games/<slug>/play?lang=en` 取得官方试玩配置，按页面中的队列、令牌和 `betman-demo.head.3oaks.com` 地址完成 login/start；不再使用 `wxgame99.com`。旧站的 `LAUNCH_HTTP_404` 不代表官网不可用，也不能再用作停派依据。
+- 每款游戏仍须先出现 `phase=session-ready` 才能 spin。官网 404/410 或 GAME_NOT_ALLOWED 只标记当前游戏 unavailable；401/403、PLAYER_LOCKOUT、429 和健康门禁按原规则停止或等待，不能把授权拒绝降级为可跳过错误。
+- 优先补代码声明的购买、加注模式各 10000 条，已达标模式不续采；再补普通模式 100000 条。用 Mongo 实际模式计数判断有效新增，不把已超标模式的历史数据算成新的配额进度。
+- 保留原 ZCode 每 20 分钟监督与现有 `capture.yml` 派发，不新建定时器，不取消健康门禁。首个使用官网入口的运行须核对 `session-ready`、实际新增与错误类型；页面 200 只证明入口可取，不能单独证明 login/start 或购买采集成功。
+- 若需诊断，现有 `diagnose.yml` 只访问官网首页、目录、启动页并验证 login/start，不 spin；必须确认 capture/diagnose 均无在途运行及完整健康门禁通过后才派发。诊断的零数据不代表采集失败，实际进度看 capture 与 Mongo。
+- 正常运行或等待保持安静；仅新故障、授权处理、恢复实际写入或全部完成时通知用户。
 
 ### 2026-09-17 派发判定修正（优先于历史轮次结论）
 
@@ -59,7 +56,7 @@
 - 无论是否有在途运行，健康检查始终保留；不要反复下载全量 job 日志或扫描数 GB NDJSON。只有有新故障签名时才提取少量相关日志。GitHub conclusion=failure 不等于所有游戏失败；预算结束后的 job 非零退出、仍标 running 的历史 claim 均不能单独算成失败游戏，也不能据此无限期冻结派发。早期退出/RESTORE_FAILED 必须单独计入真实恢复失败。
 - 曾经的整包恢复问题已改为 load(chunked=true) 元数据 + 每次最多 512 KiB 的 load_chunk，准备失败会明确回写 failed/paused。不得在新版本之后继续引用旧 run 35136745203 的同一失败永久阻止派发。先核实公开 worker、测试服协调器支持分块，再以修复后的最近完成轮评价是否复发。
 - 无在途运行、owner 为空、未到配额，且相隔至少 30 秒的两次完整门禁通过、当前限流截止时间已过、唯一索引全部存在时：若上一轮为已恢复的基础设施故障或已部署修复的旧故障，必须按第 8 条自动派发一次恢复验证轮，不要再次要求用户确认。若新版本仍复现同一系统性失败则停止并通知具体新 run 和失败阶段；禁止没有新证据地把旧故障重复解释成新故障。
-- 保持原有 20 分钟周期、20 节点/60 会话和全部限流/资源门禁。不能为了消除空档跳过健康检查、清空冷却、重跑受地区限制的节点或创建另一套定时器。
+- 保持原有 20 分钟周期、20 节点/最多 24 个活跃会话和全部限流/资源门禁。不能为了消除空档跳过健康检查、清空冷却、重跑受地区限制的节点或创建另一套定时器。
 - GitHub CLI 若未登录，不要直接认定 GitHub 不可用。使用已授权的 macOS 钥匙串 github.com / try-catch internet password，仅注入该次 gh 子进程的 GH_TOKEN；先核实 /user 的 login 为 try-catch。不得输出密码、落盘或运行带 shell trace 的命令。旧 gh:github.com 项返回 401 时不要无限重试它。
 
 1. **健康检查先做，且与是否有在途运行无关。** 一次轻量只读检查：CPU 核数、1 分钟负载、CPU/I/O/内存 PSI、可用内存、`vmstat 1 5`、协调器状态（owner/claims/`claimBackoff`/`serverHealth`/`serverHalt`）；并间隔 30 秒读取两次 Mongo `serverStatus().connections.totalCreated` 计算增长率。必须先完成这一条再看运行状态，禁止"发现有在途运行就整轮跳过监控"。

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fetchLaunchUrl, fetchText, launchApiEndpoint, openSession, ProtocolHttpError, ProtocolStatusError } from '../src/protocol';
+import { fetchText, openSession, ProtocolHttpError, ProtocolStatusError } from '../src/protocol';
 import { gameRegistrationUnavailable, permanentSessionError } from '../oaks';
 
 test('启动页 HTTP 错误保留状态和 Retry-After，不能泄露 URL token', async () => {
@@ -18,24 +18,23 @@ test('启动页 HTTP 错误保留状态和 Retry-After，不能泄露 URL token'
   } finally { globalThis.fetch = original; }
 });
 
-test('会话启动区分游戏地址生成失败与启动页 404', async () => {
+test('官网启动页 404 只隔离当前游戏', async () => {
   const original = globalThis.fetch;
   try {
     let requests = 0;
-    globalThis.fetch = async () => {
+    globalThis.fetch = async (url) => {
       requests += 1;
-      return requests === 1
-        ? Response.json({ success: true, data: 'https://3oaks.ssgfivegame.com/api/v1/games/sun_of_egypt/play?token=private' })
-        : new Response('', { status: 404 });
+      assert.equal(String(url), 'https://3oaks.com/api/v1/games/sun_of_egypt/play?lang=en');
+      return new Response('', { status: 404 });
     };
-    await assert.rejects(openSession({ playUrl: 'https://3oaks.com/games/sun_of_egypt/play' } as any), error => {
+    await assert.rejects(openSession({ playUrl: 'https://3oaks.com/api/v1/games/sun_of_egypt/play?lang=en' } as any), error => {
       assert.ok(error instanceof ProtocolHttpError);
       assert.equal(error.status, 404);
       assert.equal(error.message, 'PLAY_PAGE_HTTP_404');
       assert.equal(gameRegistrationUnavailable(error), true);
       return true;
     });
-    assert.equal(requests, 2);
+    assert.equal(requests, 1);
   } finally { globalThis.fetch = original; }
 });
 
@@ -56,29 +55,24 @@ test('只跳过当前不可注册游戏，账号和节点封控不能被降级�
   assert.equal(gameRegistrationUnavailable(new ProtocolStatusError('PLAYER_LOCKOUT', '')), false);
 });
 
-test('新测试站生成启动地址并拒绝非预期域名', async () => {
+test('官网启动配置直接连接官方试玩 API，不请求旧测试站', async () => {
   const original = globalThis.fetch;
   try {
-    const launchTokens: string[] = [];
-    globalThis.fetch = async (_input, options) => {
+    const urls: string[] = [];
+    globalThis.fetch = async (input, options) => {
+      const url = String(input);
+      urls.push(url);
+      if (urls.length === 1) return new Response(`})(window, ${JSON.stringify({
+        options: {queue: 'queue', token: 'private'},
+        desktop: {server_url: '//betman-demo.head.3oaks.com/betman-demo/gs/sun_of_egypt/desktop/{QUEUE}/demo/'},
+      })}, "//betman-demo.head.3oaks.com/betman-demo/game/runner_config/");`);
       const body = JSON.parse(String(options?.body));
-      assert.equal(body.gameId, 'sun_of_egypt');
-      assert.equal(body.gameBrand, '3oaks');
-      launchTokens.push(body.token);
-      return Response.json({ success: true, data: 'https://3oaks.ssgfivegame.com/api/v1/games/sun_of_egypt/play?token=secret' });
+      if (body.command === 'login') return Response.json({status: {code: 'OK'}, session_id: 'session', user: {huid: 'user'}});
+      return Response.json({status: {code: 'OK'}, settings: {}, context: {}});
     };
-    assert.match(await fetchLaunchUrl('https://3oaks.com/api/v1/games/sun_of_egypt/play?lang=en'), /ssgfivegame\.com/);
-    assert.match(await fetchLaunchUrl('https://3oaks.com/api/v1/games/sun_of_egypt/play?lang=en'), /ssgfivegame\.com/);
-    assert.match(launchTokens[0], /^1001_[a-f0-9]{32}$/);
-    assert.notEqual(launchTokens[0], launchTokens[1], '不同 worker/重登录必须申请不同试玩用户 token');
-    globalThis.fetch = async () => Response.json({ success: true, data: 'https://evil.example/api/v1/games/sun_of_egypt/play?token=secret' });
-    await assert.rejects(fetchLaunchUrl('https://3oaks.com/api/v1/games/sun_of_egypt/play?lang=en'), /非预期/);
+    const session = await openSession({playUrl: 'https://3oaks.com/api/v1/games/sun_of_egypt/play?lang=en', betPerLine: 1, lines: 25, defaultBet: 25} as any);
+    assert.equal(session.endpoint, 'https://betman-demo.head.3oaks.com/betman-demo/gs/sun_of_egypt/desktop/queue/demo/');
+    assert.equal(urls.length, 3);
+    assert.ok(urls.every(url => !url.includes('wxgame99.com')));
   } finally { globalThis.fetch = original; }
-});
-
-test('新测试站会话使用配套 API 代理域名', () => {
-  assert.equal(
-    launchApiEndpoint('//betman-demo.head.3oaks.com/betman-demo/gs/sun_of_egypt/desktop/{QUEUE}/demo/', 'abc', 'https://3oaks.ssgfivegame.com/api/v1/games/sun_of_egypt/play?token=x'),
-    'https://3oaks-api.ssgfivegame.com/betman-demo/gs/sun_of_egypt/desktop/abc/demo/',
-  );
 });

@@ -4,11 +4,6 @@ import { GameDiscovery } from "./catalog";
 import { discoverGame, parsePlayConfig, resolveDemoEndpoint } from "./game-definition";
 import type { PlayAction } from "./shop";
 
-export const LAUNCH_SITE = "https://www.wxgame99.com";
-export const LAUNCH_APP_ID = "1001";
-const LAUNCH_HOST = "3oaks.ssgfivegame.com";
-const API_HOST = "3oaks-api.ssgfivegame.com";
-
 export type JSONMap = Record<string, any>;
 
 export interface Session {
@@ -79,56 +74,12 @@ export async function fetchText(url: string, headers: HeadersInit = {}): Promise
   return { text: await response.text(), headers: response.headers };
 }
 
-function gameSlug(playUrl: string): string {
-  const match = new URL(playUrl).pathname.match(/\/games\/([a-z0-9_]+)\/play$/);
-  if (!match) throw new Error("无法从 3 OAKS playUrl 识别游戏");
-  return match[1];
-}
-
-export async function fetchLaunchUrl(playUrl: string): Promise<string> {
-  const slug = gameSlug(playUrl);
-  const response = await fetch(`${LAUNCH_SITE}/api/game_link`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      appId: LAUNCH_APP_ID,
-      token: `${LAUNCH_APP_ID}_${crypto.randomUUID().replaceAll("-", "")}`,
-      gameBrand: "3oaks",
-      gameType: "slot",
-      gameId: slug,
-      language: "en-us",
-    }),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new ProtocolHttpError(`LAUNCH_HTTP_${response.status}`, response.status, parseRetryAfter(response.headers.get("retry-after")));
-  let result: JSONMap;
-  try { result = JSON.parse(await response.text()) as JSONMap; }
-  catch { throw new ProtocolStatusError("INVALID_JSON", "新测试站响应不是 JSON"); }
-  if (result.success !== true || typeof result.data !== "string") {
-    const missing = String(result.error ?? result.message ?? "").includes("404");
-    if (missing) throw new ProtocolHttpError("LAUNCH_HTTP_404", 404, 0);
-    throw new ProtocolStatusError("LAUNCH_FAILED", "新测试站无法生成游戏地址");
-  }
-  const launch = new URL(result.data);
-  if (launch.protocol !== "https:" || launch.hostname !== LAUNCH_HOST || launch.pathname !== `/api/v1/games/${slug}/play` || !launch.searchParams.get("token")) {
-    throw new Error("新测试站返回了非预期的 3 OAKS 地址");
-  }
-  return launch.href;
-}
-
-export function launchApiEndpoint(serverTemplate: string, queue: string, launchUrl: string): string {
-  const endpoint = new URL(resolveDemoEndpoint(serverTemplate, queue));
-  if (new URL(launchUrl).hostname === LAUNCH_HOST) endpoint.hostname = API_HOST;
-  return endpoint.href;
-}
-
 export { parsePlayConfig } from "./game-definition";
 
 export async function openSession(game?: GameDiscovery): Promise<Session> {
   const definition = game ?? await discoverGame("sun_of_egypt");
-  const launchUrl = await fetchLaunchUrl(definition.playUrl);
   let page: Awaited<ReturnType<typeof fetchText>>;
-  try { page = await fetchText(launchUrl); }
+  try { page = await fetchText(definition.playUrl); }
   catch (error) {
     if (error instanceof ProtocolHttpError) {
       throw new ProtocolHttpError(`PLAY_PAGE_HTTP_${error.status}`, error.status, error.retryAfterMs);
@@ -137,8 +88,8 @@ export async function openSession(game?: GameDiscovery): Promise<Session> {
   }
   const config = parsePlayConfig(page.text);
   const queue = String(config.options.queue);
-  const token = String(new URL(launchUrl).searchParams.get("token") ?? config.options.token);
-  const endpoint = launchApiEndpoint(String(config.desktop?.server_url ?? definition.serverTemplate), queue, launchUrl);
+  const token = String(config.options.token);
+  const endpoint = resolveDemoEndpoint(String(config.desktop?.server_url ?? definition.serverTemplate), queue);
   const cookie = page.headers.get("set-cookie")?.split(",").map((v) => v.split(";")[0]).join("; ") ?? "";
   const login = await command(endpoint, cookie, "login", { token, language: "en" });
   const start = await command(endpoint, cookie, "start", { session_id: login.session_id, mode: "play", huid: login.user.huid });

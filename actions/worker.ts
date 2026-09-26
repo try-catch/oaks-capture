@@ -374,30 +374,17 @@ async function main(): Promise<void> {
       installDurability();
       const { readRegistry } = await import('../catalog-sync');
       const registry = await readRegistry();
-      // 验证新测试站目录与 3 OAKS login/start；不下注、不打印会话信息。
-      for (const [stage, url, options] of [
-        ['home', 'https://www.wxgame99.com/', undefined],
-        ['catalog', 'https://www.wxgame99.com/api/game_list', {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ appId: '1001', gameBrand: '3oaks', gameType: 'slot' }),
-        }],
-      ] as const) {
-        const response = await fetch(url, options);
+      // 官网启动页和 login/start 验证；不下注、不打印试玩令牌。
+      for (const [stage, url] of [
+        ['home', 'https://3oaks.com/'],
+        ['catalog', 'https://3oaks.com/api/v1/games'],
+        ['launch', `https://3oaks.com/api/v1/games/${encodeURIComponent(slug)}/play?lang=en`],
+      ]) {
+        const response = await fetch(url);
         console.log(JSON.stringify({ phase: 'upstream-probe', stage, slug,
           status: response.status, html: response.headers.get('content-type')?.includes('text/html') === true,
           githubHosted: process.env.RUNNER_ENVIRONMENT === 'github-hosted' }));
-        if (stage === 'catalog' && response.ok) {
-          const data = await response.json() as any;
-          const items = Array.isArray(data.data) ? data.data : [];
-          console.log(JSON.stringify({ phase: 'catalog-shape', itemCount: items.length,
-            responseFields: Object.keys(data), itemFields: Object.keys(items[0] ?? {}) }));
-          const ids = items.map((item: any) => item.gameId)
-            .filter((id: unknown): id is string => typeof id === 'string' && /^[a-z0-9_]+$/.test(id));
-          const listed = new Set(ids);
-          console.log(JSON.stringify({ phase: 'catalog-coverage', listedIds: listed.size,
-            sampleIds: ids.slice(0, 3), claimedListed: listed.has(slug),
-            missing: listed.size ? registry.games.filter(game => game.active && !listed.has(game.slug)).map(game => game.slug) : undefined }));
-        }
+        if (!response.ok) throw new Error(`官网 ${stage} HTTP ${response.status}`);
       }
       const { openSession, ProtocolHttpError, ProtocolStatusError } = await import('../src/protocol');
       const game = registry.games.find(game => game.slug === slug);
@@ -424,26 +411,9 @@ async function main(): Promise<void> {
     requireProviderAuthorization();
     const threads = activeThreads();
     const nodes = numberFromEnv('OAKS_NODES', 1);
-    let preferredGames: string[] | undefined;
-    try {
-      const response = await fetch('https://www.wxgame99.com/api/game_list', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ appId: '1001', gameBrand: '3oaks', gameType: 'slot' }),
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (response.ok) {
-        const catalog = await response.json() as any;
-        const ids: unknown[] = Array.isArray(catalog.data) ? catalog.data.map((item: any) => item.gameId) : [];
-        const valid = [...new Set(ids.filter((id: unknown): id is string =>
-          typeof id === 'string' && /^[a-z0-9_]+$/.test(id)))];
-        if (catalog.success === true && valid.length >= 70 && valid.includes('sun_of_egypt')) preferredGames = valid;
-      }
-    } catch { /* 目录不可用时保留原有调度，不阻断采集。 */ }
-    console.log(JSON.stringify({ phase: 'catalog-schedule', preferred: preferredGames?.length ?? 0 }));
     try {
       console.log(JSON.stringify(rpc('begin', {
       githubToken: process.env.OAKS_GITHUB_TOKEN,
-      preferredGames,
       threads,
       nodes,
       nodeMs: numberFromEnv('OAKS_NODE_SPACING_MS', 250),

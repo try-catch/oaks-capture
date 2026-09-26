@@ -85,6 +85,7 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
       const blocked = event.blockedReason;
       diagnostic.blocked = !blocked ? 'none' : ['csp', 'mixed-content', 'origin', 'inspector',
         'subresource-filter', 'other'].includes(blocked) ? blocked : 'other_blocked';
+      console.error(JSON.stringify({ phase: 'browser-network-failure', command: fetchFailureDiagnostic(url, null).command, ...diagnostic }));
     });
     const matches = (request: BrowserRequest) => request.url() === url && request.method() === method;
     const onRequest = (request: BrowserRequest) => { if (matches(request)) diagnostic.requestSeen = true; };
@@ -130,7 +131,8 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
     } finally {
       page.off('request', onRequest);
       page.off('requestfailed', onFailed);
-      await network.detach().catch(() => {});
+      // 超时可能同时关闭浏览器；清理不能卡住原始失败及 done/end 回写。
+      void network.detach().catch(() => {});
     }
   } finally {
     options.signal?.removeEventListener('abort', abort);

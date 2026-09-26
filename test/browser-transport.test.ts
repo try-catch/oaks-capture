@@ -31,7 +31,10 @@ test('原生浏览器传输保留响应、限速头并隔离客户端请求头',
   const page = {
     context: () => ({ newCDPSession: async () => ({
       on: (event: string, listener: (event: any) => void) => { networkListeners.set(event, listener); },
-      send: async () => {}, detach: async () => { detached++; networkListeners.clear(); },
+      send: async () => {}, detach: async () => {
+        detached++; networkListeners.clear();
+        if (fail) await new Promise(() => {}); // 浏览器关闭后的清理挂起不得吞掉原始异常。
+      },
     }) }),
     on: (event: string, listener: (request: any) => void) => { listeners.set(event, listener); },
     off: (event: string) => { listeners.delete(event); },

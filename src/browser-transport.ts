@@ -58,6 +58,8 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
     const responseHeaders = await response.allHeaders();
     delete responseHeaders['content-encoding'];
     delete responseHeaders['content-length'];
+    // Playwright 将多个 Set-Cookie 合为换行文本，不能转入 Fetch Headers；Cookie 已由浏览器独立管理。
+    delete responseHeaders['set-cookie'];
     let data: Buffer;
     try { data = await response.body(); }
     catch (error) { if (response.ok()) throw error; data = Buffer.alloc(0); }

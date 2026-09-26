@@ -11,7 +11,7 @@ test('原生浏览器传输保留响应、限速头并隔离客户端请求头',
   const page = {
     goto: async () => ({ ok: () => true }),
     waitForResponse: async () => ({
-      allHeaders: async () => ({ 'retry-after': '3600', 'content-type': 'application/json', 'content-encoding': 'gzip', 'content-length': '12' }),
+      allHeaders: async () => ({ 'retry-after': '3600', 'content-type': 'application/json', 'content-encoding': 'gzip', 'content-length': '12', 'set-cookie': 'demo=one; Path=/\nother=two; Path=/' }),
       body: async () => payload, status: () => status, ok: () => status === 200,
     }),
     evaluate: async (_: unknown, request: unknown) => { sent = request; },
@@ -33,6 +33,7 @@ test('原生浏览器传输保留响应、限速头并隔离客户端请求头',
     assert.equal(response.headers.get('retry-after'), '3600');
     assert.equal(response.headers.get('content-encoding'), null);
     assert.equal(response.headers.get('content-length'), null);
+    assert.equal(response.headers.get('set-cookie'), null);
     assert.deepEqual(sent.headers, { 'content-type': 'text/plain' });
     assert.equal(sent.body, '{"command":"login"}');
     status = 429;

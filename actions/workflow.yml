@@ -42,7 +42,8 @@ env:
   # 单节点线程数、节点数、请求间隔必须与服务商书面授权允许的并发一致。
   OAKS_THREADS: '8'
   OAKS_NODES: '20'
-  OAKS_NODE_SPACING_MS: '800'
+  # 原生浏览器单节点 3000ms 探针通过；800ms 批量出现 429，先复用已验证的保守节奏。
+  OAKS_NODE_SPACING_MS: '3000'
   OAKS_THROTTLE_LIMIT: '6'
   OAKS_DEADLINE_MINUTES: '45'
   # 官网入口出现跨出口 429 后先保守降速；仍按 Retry-After 退避，不放宽并发门禁。

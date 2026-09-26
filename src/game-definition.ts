@@ -112,7 +112,8 @@ async function protocolCommand(
   const response = await fetcher(`${endpoint}?gsc=${encodeURIComponent(command)}`, {
     method: "POST",
     headers: { "content-type": "text/plain", ...(cookie ? { cookie } : {}) },
-    body: JSON.stringify({ command, request_id: crypto.randomUUID().replaceAll("-", ""), ...extra }),
+    body: JSON.stringify({ command, request_id: crypto.randomUUID().replaceAll("-", ""), ...extra,
+      client_command_timestamp: Date.now() }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`${command} 请求失败: ${response.status} ${response.statusText}`);
@@ -195,7 +196,8 @@ export async function discoverCapabilities(slug: string, fetcher: typeof fetch =
   const token = String(launch.options?.token ?? "");
   if (!queue || !token) throw new Error(`3 OAKS ${slug} 启动配置缺少临时会话参数`);
   const endpoint = resolveDemoEndpoint(definition.desktop.serverTemplate, queue);
-  const cookie = response.headers.get("set-cookie")?.split(",").map((part) => part.split(";")[0]).join("; ") ?? "";
+  // 与官网跨域 XHR 一致，不把网站 Cookie 转发给试玩 API。
+  const cookie = "";
   const login = await protocolCommand(fetcher, endpoint, cookie, "login", { token, language: "en" });
   const start = await protocolCommand(fetcher, endpoint, cookie, "start", {
     session_id: login.session_id,

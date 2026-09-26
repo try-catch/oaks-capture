@@ -40,9 +40,11 @@ test("capabilities 解析桌面移动端、语言和真实 start 设置且不泄
     },
   };
   const html = `})(window, ${JSON.stringify(launch)}, "//betman-demo.head.3oaks.com/betman-demo/game/runner_config/");`;
-  const fetcher = async (input: string | URL | Request): Promise<Response> => {
+  const fetcher = async (input: string | URL | Request, options?: RequestInit): Promise<Response> => {
     const url = String(input);
     if (url.includes("/play?")) return new Response(html, { status: 200, headers: { "set-cookie": "demo=value; Path=/" } });
+    assert.equal(new Headers(options?.headers).has("cookie"), false);
+    assert.ok(Math.abs(Date.now() - JSON.parse(String(options?.body)).client_command_timestamp) < 1000);
     if (url.includes("gsc=login")) return Response.json({ status: { code: "OK" }, session_id: "secret-session", user: { huid: "secret-user" } });
     if (url.includes("gsc=start")) return Response.json({
       status: { code: "OK" },

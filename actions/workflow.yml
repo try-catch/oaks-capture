@@ -1,4 +1,5 @@
 name: 3 OAKS durable capture
+run-name: 3 OAKS ${{ inputs.mode || 'capture' }}
 
 on:
   workflow_dispatch:

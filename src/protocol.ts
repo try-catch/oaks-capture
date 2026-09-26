@@ -90,7 +90,8 @@ export async function openSession(game?: GameDiscovery): Promise<Session> {
   const queue = String(config.options.queue);
   const token = String(config.options.token);
   const endpoint = resolveDemoEndpoint(String(config.desktop?.server_url ?? definition.serverTemplate), queue);
-  const cookie = page.headers.get("set-cookie")?.split(",").map((v) => v.split(";")[0]).join("; ") ?? "";
+  // 官网 Runner 跨域 XHR 未启用 withCredentials；试玩只使用启动令牌。
+  const cookie = "";
   const login = await command(endpoint, cookie, "login", { token, language: "en" });
   const start = await command(endpoint, cookie, "start", { session_id: login.session_id, mode: "play", huid: login.user.huid });
   const settings = sessionSpinSettings(start, {
@@ -107,7 +108,8 @@ export async function command(endpoint: string, cookie: string, name: string, ex
     set_denominator: 1, quick_spin: false, sound: false, autogame: false,
     mobile: "0", portrait: false, fullscreen: false,
   } : {};
-  const body = JSON.stringify({ command: name, request_id: crypto.randomUUID().replaceAll("-", ""), ...playOptions, ...extra });
+  const body = JSON.stringify({ command: name, request_id: crypto.randomUUID().replaceAll("-", ""), ...playOptions, ...extra,
+    client_command_timestamp: Date.now() });
   const response = await fetch(`${endpoint}?gsc=${encodeURIComponent(name)}`, {
     method: "POST",
     headers: { "content-type": "text/plain", ...(cookie ? { cookie } : {}) },

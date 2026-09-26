@@ -65,14 +65,19 @@ test('官网启动配置直接连接官方试玩 API，不请求旧测试站', a
       if (urls.length === 1) return new Response(`})(window, ${JSON.stringify({
         options: {queue: 'queue', token: 'private'},
         desktop: {server_url: '//betman-demo.head.3oaks.com/betman-demo/gs/sun_of_egypt/desktop/{QUEUE}/demo/'},
-      })}, "//betman-demo.head.3oaks.com/betman-demo/game/runner_config/");`);
+      })}, "//betman-demo.head.3oaks.com/betman-demo/game/runner_config/");`, {
+        headers: { 'set-cookie': 'site=private; Expires=Sat, 03 Oct 2026 14:00:00 GMT; Path=/' },
+      });
       const body = JSON.parse(String(options?.body));
+      assert.equal(new Headers(options?.headers).has('cookie'), false);
+      assert.ok(Math.abs(Date.now() - body.client_command_timestamp) < 1000);
       if (body.command === 'login') return Response.json({status: {code: 'OK'}, session_id: 'session', user: {huid: 'user'}});
       return Response.json({status: {code: 'OK'}, settings: {}, context: {}});
     };
     const session = await openSession({playUrl: 'https://3oaks.com/api/v1/games/sun_of_egypt/play?lang=en', betPerLine: 1, lines: 25, defaultBet: 25} as any);
     assert.equal(session.endpoint, 'https://betman-demo.head.3oaks.com/betman-demo/gs/sun_of_egypt/desktop/queue/demo/');
     assert.equal(urls.length, 3);
+    assert.equal(session.cookie, '');
     assert.ok(urls.every(url => !url.includes('wxgame99.com')));
   } finally { globalThis.fetch = original; }
 });

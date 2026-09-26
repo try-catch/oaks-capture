@@ -206,6 +206,13 @@ function installDurability(): void {
     if (localResponses.size > 1000) localResponses.delete(localResponses.keys().next().value!);
     const respondStarted = Date.now();
     const code = businessStatusCode(body);
+    if (!response.ok) {
+      const command = new URL(url).searchParams.get('gsc') ?? 'launch';
+      realLog(JSON.stringify({ phase: 'protocol-http-error', slug, status: response.status,
+        command: /^[a-z_]+$/.test(command) ? command : 'unknown',
+        businessCode: code && /^[A-Z_]{1,64}$/.test(code) ? code : undefined,
+        json: headers['content-type']?.includes('json') === true }));
+    }
     const usable = response.ok && usableResponse(body);
     const settled = rpc('response', {
       key,
@@ -399,6 +406,12 @@ async function main(): Promise<void> {
       }
       console.log(JSON.stringify({ phase: 'upstream-probe', stage: 'session-ready', slug }));
       rpc('done', { status: 'paused', count: claim.baselineCount ?? 0 });
+    } catch (error) {
+      // 探针失败也必须结束租约，否则只读报告会把遗留 running 当成正在采集。
+      if (owned && slug) {
+        try { rpc('done', { status: 'failed', reason: reasonOf(error) }); } catch { /* end 仍负责释放所有权 */ }
+      }
+      throw error;
     } finally {
       try { if (owned) rpc('end'); } finally { channel.close(); }
     }

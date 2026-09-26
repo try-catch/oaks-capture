@@ -1,9 +1,17 @@
-import { chromium, type Browser, type Page } from 'playwright';
+import { chromium, type Browser, type Page, type Request as BrowserRequest } from 'playwright';
 import { REQUEST_TIMEOUT_MS } from '../config';
 import { ProtocolHttpError } from './protocol';
 
 // 每个 worker 进程独享一个原生浏览器上下文；不同节点、线程不共享 Cookie 或试玩用户。
 let session: Promise<{ browser: Browser; page: Page }> | undefined;
+const browserFailures = new WeakMap<Error, { network: string; pageFetch: string; requestSeen: boolean }>();
+
+export function safeNetworkFailure(value: string | undefined): string {
+  return ['net::ERR_FAILED', 'net::ERR_ABORTED', 'net::ERR_TIMED_OUT', 'net::ERR_CONNECTION_RESET',
+    'net::ERR_CONNECTION_CLOSED', 'net::ERR_CONNECTION_REFUSED', 'net::ERR_NAME_NOT_RESOLVED',
+    'net::ERR_CERT_AUTHORITY_INVALID', 'net::ERR_HTTP2_PROTOCOL_ERROR', 'net::ERR_BLOCKED_BY_CLIENT'].includes(value ?? '')
+    ? value! : value ? 'other_network_failure' : 'none';
+}
 
 // 公开诊断只输出白名单阶段与固定类别，不携带 URL、令牌或原始异常。
 export function fetchFailureDiagnostic(url: string, error: unknown): { command: string; kind: string } {
@@ -16,7 +24,7 @@ export function fetchFailureDiagnostic(url: string, error: unknown): { command: 
   const kind = /page\.waitForResponse: Timeout/.test(message) ? 'response_timeout'
     : error instanceof Error && error.name === 'TimeoutError' ? 'timeout'
     : error instanceof Error && error.name === 'AbortError' ? 'aborted' : 'fetch_failed';
-  return { command, kind };
+  return { command, kind, ...(error instanceof Error ? browserFailures.get(error) : undefined) };
 }
 
 async function browserPage(): Promise<Page> {
@@ -57,6 +65,15 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
     // 浏览器负责真实的来源、Cookie 和客户端请求头，不伪造浏览器指纹。
     for (const name of ['origin', 'referer', 'cookie', 'user-agent', 'host', 'content-length', 'accept-encoding']) headers.delete(name);
     const body = options.body as string | undefined;
+    const diagnostic = { network: 'none', pageFetch: 'pending', requestSeen: false };
+    const matches = (request: BrowserRequest) => request.url() === url && request.method() === method;
+    const onRequest = (request: BrowserRequest) => { if (matches(request)) diagnostic.requestSeen = true; };
+    const onFailed = (request: BrowserRequest) => {
+      if (matches(request)) diagnostic.network = safeNetworkFailure(request.failure()?.errorText);
+    };
+    page.on('request', onRequest);
+    page.on('requestfailed', onFailed);
+    try {
     const [response] = await Promise.all([
       page.waitForResponse(response => response.url() === url && response.request().method() === method,
         { timeout: REQUEST_TIMEOUT_MS }),
@@ -65,8 +82,15 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
           const response = await fetch(request.url, { method: request.method, headers: request.headers,
             body: request.body, credentials: 'same-origin', signal: AbortSignal.timeout(request.timeout) });
           await response.arrayBuffer();
-        } catch { /* HTTP/CORS 拒绝仍通过浏览器网络响应交给原有协议错误处理 */ }
-      }, { url, method, headers: Object.fromEntries(headers), body, timeout: REQUEST_TIMEOUT_MS }),
+          return 'resolved';
+        } catch (error) {
+          // 只传固定分类；原始异常可能携带 URL/令牌，不回传。
+          const name = error instanceof Error ? error.name : '';
+          return name === 'TimeoutError' ? 'timeout' : name === 'AbortError' ? 'aborted'
+            : name === 'TypeError' ? 'type_error' : 'other_error';
+        }
+      }, { url, method, headers: Object.fromEntries(headers), body, timeout: REQUEST_TIMEOUT_MS })
+        .then(result => { diagnostic.pageFetch = result; }),
     ]);
     // 页面 JS 不能读取未被 CORS 暴露的 Retry-After；从原生网络响应保留全部限速头。
     const responseHeaders = await response.allHeaders();
@@ -79,6 +103,13 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
     catch (error) { if (response.ok()) throw error; data = Buffer.alloc(0); }
     return new Response([204, 205, 304].includes(response.status()) ? null : new Uint8Array(data),
       { status: response.status(), headers: responseHeaders });
+    } catch (error) {
+      if (error instanceof Error) browserFailures.set(error, { ...diagnostic });
+      throw error;
+    } finally {
+      page.off('request', onRequest);
+      page.off('requestfailed', onFailed);
+    }
   } finally {
     options.signal?.removeEventListener('abort', abort);
   }

@@ -6,6 +6,10 @@ import { recoverableRoundError, retryDelayMs } from "../oaks";
 import { command, ProtocolHttpError, ProtocolStatusError } from "../src/protocol";
 
 const worker = fs.readFileSync(path.resolve(__dirname, "..", "actions", "worker.ts"), "utf8");
+test("收尾同步失败仍尝试done回写且不得虚报租约已释放", () => {
+  assert.match(worker, /syncFiles\(\);\s*\} catch \{[\s\S]*?reason = 'FINAL_SYNC_FAILED';[\s\S]*?stopping = true;[\s\S]*?\}\s*try \{\s*rpc\('done', \{ status, count, reason \}\)/);
+  assert.ok(worker.includes('状态回写失败，需协调器核对租约'));
+});
 test("局内业务失败重开前必须退避且记录 HTTP 200 的业务错误", () => {
   const source = fs.readFileSync(path.resolve(__dirname, "..", "oaks.ts"), "utf8");
   assert.match(source, /await waitForRetry\(Math.max\(retryDelayMs\(error, retries\), rateLimitDelay\), game\);\s*session = await openSessionWithRetry/);

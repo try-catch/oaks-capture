@@ -344,9 +344,17 @@ async function runThread(): Promise<void> {
       // 节点被熔断时协调器会交回租约，此时本轮落盘和状态回写会被拒绝，数据已在测试服 NDJSON 中。
       try {
         syncFiles();
+      } catch {
+        // 同步失败不能跳过租约收口，也不能把未同步的数据标记验收通过。
+        status = 'failed';
+        reason = 'FINAL_SYNC_FAILED';
+        stopping = true;
+        process.exitCode = 1;
+      }
+      try {
         rpc('done', { status, count, reason });
       } catch {
-        console.warn(JSON.stringify({ worker, slug, status, note: '租约已交回，保留已落盘数据' }));
+        console.warn(JSON.stringify({ worker, slug, status, note: '状态回写失败，需协调器核对租约；保留已落盘数据' }));
       }
       console.log(JSON.stringify({ worker, slug, status, count, reason }));
     }

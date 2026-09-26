@@ -770,8 +770,8 @@ class Store:
                 window = [item for item in state['rateNodes'] if now - item['at'] < GLOBAL_LIMIT_WINDOW_MS]
                 window.append({'node': node, 'at': now})
                 state['rateNodes'] = window
-                if len({item['node'] for item in window}) >= GLOBAL_LIMIT_NODES:
-                    # 多个出口同时被限速说明是服务商整体的限制，所有节点一起等。
+                if len({item['node'] for item in window}) >= max(GLOBAL_LIMIT_NODES, (state['topology']['nodes'] + 1) // 2):
+                    # 大批出口同时被限速才判定为全局限制；少数出口仅各自遵守 Retry-After。
                     state['until'] = max(state['until'], now + wait)
                 if len(threads) >= state['topology']['throttleLimit']:
                     # 单节点内太多线程被限速：熔断该出口，保留数据并让新节点接续。

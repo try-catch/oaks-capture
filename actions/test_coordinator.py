@@ -295,6 +295,15 @@ class RecoveryTests(unittest.TestCase):
         self.assertNotIn('1', state['halted'])
         self.assertEqual(state['claims'][slug]['status'], 'running')
 
+    def test_two_limited_nodes_do_not_pause_twenty_nodes(self):
+        self.call('end')
+        self.call('begin', threads=2, nodes=20, maxClaims=20, throttleLimit=2)
+        first = self.call('claim')['slug']
+        second = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)['slug']
+        self.throttle('1', first, self.key)
+        self.throttle('2', second, 'b' * 64)
+        self.assertLess(self.call('status')['until'], time.time() * 1000)
+
     def test_two_node_throttle_pauses_all_workers_across_runs(self):
         self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)
         self.throttle('1', 'one', self.key)

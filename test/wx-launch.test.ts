@@ -24,3 +24,11 @@ test('按历史 game_link 协议直接取得指定游戏链接', async () => {
       'https://3oaks.ssgfivegame.com/api/v1/games/lucky_penny_2/play?token=x');
   } finally { globalThis.fetch = original; }
 });
+
+test('旧站未提供该游戏时保留明确分类', async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => Response.json({ success: false });
+    await assert.rejects(wxLaunchUrl('grand'), /WX_SOURCE_UNAVAILABLE/);
+  } finally { globalThis.fetch = original; }
+});

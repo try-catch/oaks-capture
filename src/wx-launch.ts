@@ -17,6 +17,7 @@ export async function wxLaunchUrl(slug: string): Promise<string> {
   });
   if (!response.ok) throw new Error(`WX_LINK_HTTP_${response.status}`);
   const result = await response.json() as { success?: boolean; data?: string };
+  if (result.success === false) throw new Error('WX_SOURCE_UNAVAILABLE');
   if (result.success !== true || typeof result.data !== 'string' || !isWxLaunchUrl(result.data, slug) ||
       !new URL(result.data).searchParams.get('token')) throw new Error('WX_LINK_INVALID');
   return result.data;

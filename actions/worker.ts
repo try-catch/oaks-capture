@@ -322,9 +322,14 @@ async function runThread(): Promise<void> {
         realLog(JSON.stringify({ worker, slug, phase: 'wx-launch-ready' }));
       } catch (error) {
         const reason = reasonOf(error);
-        try { rpc('done', { status: 'failed', reason }); }
+        let released = false;
+        try { rpc('done', { status: 'failed', reason }); released = true; }
         catch { realLog(JSON.stringify({ worker, slug, note: 'WX_LAUNCH_DONE_FAILED' })); }
         realLog(JSON.stringify({ worker, slug, phase: 'wx-launch-failed', reason }));
+        if (reason === 'WX_SOURCE_UNAVAILABLE' && released && !process.env.OAKS_SINGLE_GAME) {
+          await new Promise(resolve => setTimeout(resolve, numberFromEnv('OAKS_GAME_SWITCH_DELAY_MS', 10_000)));
+          continue;
+        }
         process.exitCode = 1;
         break;
       }

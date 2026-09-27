@@ -26,6 +26,7 @@ let shardIndex = 0;
 let egress = process.env.OAKS_EGRESS ?? '';
 const documentBatch: string[] = [];
 const localResponses = new Map<string, { body: Buffer; status: number; headers: Record<string, string> }>();
+let alternateLaunch: { url: string; html: string } | undefined;
 // 采集期会屏蔽 console.log 以免把工具日志带进公开 Actions 日志；
 // 但吞吐诊断行只含数字与节点标识，用原始引用绕过屏蔽输出。
 const realLog = console.log.bind(console);
@@ -175,6 +176,7 @@ function installDurability(): void {
   globalThis.fetch = async (input, options = {}) => {
     if (stopped()) throw new Error('ACTIONS_BUDGET');
     const url = String(input);
+    if (alternateLaunch && url === alternateLaunch.url) return new Response(alternateLaunch.html, { status: 200 });
     if (!/^https:\/\//.test(url)) throw new Error('只允许 HTTPS 官方请求');
     const key = requestKey ?? crypto.randomBytes(32).toString('hex');
     const locallyCached = localResponses.get(key);
@@ -262,6 +264,10 @@ async function runThread(): Promise<void> {
   const { captureGame, gameRegistrationUnavailable, recoverableRoundError } = await import('../oaks');
   const registry = await readRegistry();
   installDurability();
+  if (process.env.OAKS_SOURCE === 'wx' && !process.env.OAKS_SINGLE_GAME) throw new Error('WX_SOURCE_REQUIRES_SINGLE_GAME');
+  if (process.env.OAKS_SOURCE === 'wx') {
+    process.argv = [process.execPath, __filename, '--rounds', '1', '--normal-rounds', '0', '--target-per-mode', '10000', '--mode-types', '2'];
+  }
   deadline = Date.now() + numberFromEnv('OAKS_DEADLINE_MINUTES', 40) * 60_000;
   while (!stopped()) {
     let claimed: any;
@@ -305,6 +311,22 @@ async function runThread(): Promise<void> {
       realLog(JSON.stringify({ worker, slug, phase: 'restore', status, reason: 'RESTORE_FAILED' }));
       if (status === 'failed') process.exitCode = 1;
       break;
+    }
+    if (process.env.OAKS_SOURCE === 'wx') {
+      try {
+        if (!game?.discovery) throw new Error('MISSING_DISCOVERY');
+        const { launchFromWx } = await import('../src/wx-launch');
+        alternateLaunch = await launchFromWx(game.slug, game.title);
+        game.discovery.playUrl = alternateLaunch.url;
+        realLog(JSON.stringify({ worker, slug, phase: 'wx-launch-ready' }));
+      } catch (error) {
+        const reason = reasonOf(error);
+        try { rpc('done', { status: 'failed', reason }); }
+        catch { realLog(JSON.stringify({ worker, slug, note: 'WX_LAUNCH_DONE_FAILED' })); }
+        realLog(JSON.stringify({ worker, slug, phase: 'wx-launch-failed', reason }));
+        process.exitCode = 1;
+        break;
+      }
     }
     pending = undefined;
     requestKey = undefined;

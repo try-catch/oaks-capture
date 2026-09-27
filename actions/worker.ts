@@ -315,7 +315,7 @@ async function runThread(): Promise<void> {
       try {
         if (!game?.discovery) throw new Error('MISSING_DISCOVERY');
         const { launchFromWx } = await import('../src/wx-launch');
-        alternateLaunch = await launchFromWx(game.slug, game.title);
+        alternateLaunch = await launchFromWx(game.slug);
         game.discovery.playUrl = alternateLaunch.url;
         realLog(JSON.stringify({ worker, slug, phase: 'wx-launch-ready' }));
       } catch (error) {

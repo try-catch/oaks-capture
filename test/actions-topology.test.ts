@@ -63,7 +63,7 @@ test("同时活跃的官方会话数受限，不能等于线程总数", () => {
   assert.doesNotMatch(worker, /maxClaims: threads \* nodes/);
   assert.match(worker, /maxShards: numberFromEnv\('OAKS_SHARDS_PER_GAME', 2\)/);
   assert.match(worker, /https:\/\/3oaks\.com\/api\/v1\/games/);
-  assert.doesNotMatch(worker, /wxgame99\.com/);
+  assert.match(worker, /url === 'https:\/\/www\.wxgame99\.com\/api\/game_link'/);
 });
 
 test("begin 把线程与节点拓扑交给协调器作为并发预算", () => {

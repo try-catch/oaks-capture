@@ -36,7 +36,7 @@ export class ProtocolStatusError extends Error {
   }
 }
 
-function parseRetryAfter(value: string | null): number {
+export function parseRetryAfter(value: string | null): number {
   if (!value) return 0;
   const seconds = Number(value);
   if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;

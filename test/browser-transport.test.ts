@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
-import { browserFetch, closeBrowserTransport, fetchFailureDiagnostic, requestMetadata, safeNetworkFailure } from '../src/browser-transport';
+import { browserFetch, browserTargetAllowed, closeBrowserTransport, fetchFailureDiagnostic, requestMetadata, safeNetworkFailure } from '../src/browser-transport';
+
+test('旧站浏览器通道只额外允许指定启动 API', () => {
+  assert.equal(browserTargetAllowed('https://www.wxgame99.com/api/game_link', true), true);
+  assert.equal(browserTargetAllowed('https://www.wxgame99.com/', true), false);
+  assert.equal(browserTargetAllowed('https://www.wxgame99.com/api/game_link', false), false);
+  assert.equal(browserTargetAllowed('http://www.wxgame99.com/api/game_link', true), false);
+});
 
 test('请求诊断只保留来源主机和固定协议字段', () => {
   assert.deepEqual(requestMetadata({origin:'https://3oaks.com',referer:'https://3oaks.com/game/grand?token=secret',

@@ -197,7 +197,9 @@ function installDurability(): void {
     const fetchStarted = Date.now();
     let response: Response;
     try {
-      response = await officialFetch(input, { ...options, signal: AbortSignal.timeout(20_000) });
+      const transport = process.env.OAKS_SOURCE === 'wx' && url === 'https://www.wxgame99.com/api/game_link'
+        ? browserFetch : officialFetch;
+      response = await transport(input, { ...options, signal: AbortSignal.timeout(20_000) });
     } catch (error) {
       realLog(JSON.stringify({ phase: 'protocol-fetch-error', slug, worker,
         ...fetchFailureDiagnostic(url, error), elapsedMs: Date.now() - fetchStarted }));

@@ -1,6 +1,6 @@
 import { chromium, type Browser, type Page, type Request as BrowserRequest } from 'playwright';
 import { REQUEST_TIMEOUT_MS } from '../config';
-import { ProtocolHttpError } from './protocol';
+import { parseRetryAfter, ProtocolHttpError } from './protocol';
 
 // 每个 worker 进程独享一个原生浏览器上下文；不同节点、线程不共享 Cookie 或试玩用户。
 let session: Promise<{ browser: Browser; page: Page }> | undefined;
@@ -44,13 +44,17 @@ export function fetchFailureDiagnostic(url: string, error: unknown): { command: 
 
 async function browserPage(): Promise<Page> {
   session ??= (async () => {
+    const wx = process.env.OAKS_SOURCE === 'wx';
     const browser = await chromium.launch({ headless: true,
       ...(process.env.OAKS_BROWSER_CHANNEL === 'chrome' ? { channel: 'chrome' as const } : {}) });
     try {
       const context = await browser.newContext();
       const page = await context.newPage();
-      const response = await page.goto('https://3oaks.com/', { waitUntil: 'domcontentloaded', timeout: REQUEST_TIMEOUT_MS });
-      if (!response?.ok()) throw new ProtocolHttpError('BROWSER_BOOTSTRAP_HTTP_' + response?.status(), response?.status() ?? 0, 0);
+      const response = await page.goto(wx ? 'https://www.wxgame99.com/api/game_link' : 'https://3oaks.com/',
+        { waitUntil: wx ? 'commit' : 'domcontentloaded', timeout: REQUEST_TIMEOUT_MS });
+      if (!response || (!response.ok() && !(wx && response.status() === 405)))
+        throw new ProtocolHttpError('BROWSER_BOOTSTRAP_HTTP_' + response?.status(), response?.status() ?? 0,
+          parseRetryAfter(response?.headers()['retry-after'] ?? null));
       return { browser, page };
     } catch (error) { await browser.close(); throw error; }
   })().catch(error => { session = undefined; throw error; });
@@ -63,10 +67,16 @@ export async function closeBrowserTransport(): Promise<void> {
   if (current) await current.then(value => value.browser.close()).catch(() => {});
 }
 
+export function browserTargetAllowed(value: string, wx = process.env.OAKS_SOURCE === 'wx'): boolean {
+  const target = new URL(value);
+  return target.protocol === 'https:' && (target.hostname === '3oaks.com' || target.hostname.endsWith('.3oaks.com') ||
+    (wx && target.hostname === 'www.wxgame99.com' && target.pathname === '/api/game_link'));
+}
+
 export const browserFetch: typeof fetch = async (input, options = {}) => {
   const url = input instanceof Request ? input.url : String(input);
   const target = new URL(url);
-  if (target.protocol !== 'https:' || !(target.hostname === '3oaks.com' || target.hostname.endsWith('.3oaks.com'))) {
+  if (!browserTargetAllowed(url)) {
     throw new Error('浏览器采集只允许官方 HTTPS 地址');
   }
   if (options.body != null && typeof options.body !== 'string') throw new Error('浏览器采集只支持文本请求体');

@@ -88,8 +88,16 @@ export async function openSession(game?: GameDiscovery): Promise<Session> {
   }
   const config = parsePlayConfig(page.text);
   const queue = String(config.options.queue);
-  const token = String(config.options.token);
-  const endpoint = resolveDemoEndpoint(String(config.desktop?.server_url ?? definition.serverTemplate), queue);
+  const wx = process.env.OAKS_SOURCE === "wx";
+  const launch = new URL(definition.playUrl);
+  if (wx && launch.hostname !== "3oaks.ssgfivegame.com") throw new Error("旧站启动地址异常");
+  const token = String((wx && launch.searchParams.get("token")) || config.options.token);
+  const api = new URL(resolveDemoEndpoint(String(config.desktop?.server_url ?? definition.serverTemplate), queue));
+  if (wx) {
+    if (api.hostname !== "betman-demo.head.3oaks.com") throw new Error("旧站协议地址异常");
+    api.hostname = "3oaks-api.ssgfivegame.com";
+  }
+  const endpoint = api.href;
   // 官网 Runner 跨域 XHR 未启用 withCredentials；试玩只使用启动令牌。
   const cookie = "";
   const login = await command(endpoint, cookie, "login", { token, language: "en" });
@@ -108,11 +116,12 @@ export async function command(endpoint: string, cookie: string, name: string, ex
     set_denominator: 1, quick_spin: false, sound: false, autogame: false,
     mobile: "0", portrait: false, fullscreen: false,
   } : {};
+  const wx = process.env.OAKS_SOURCE === "wx";
   const body = JSON.stringify({ command: name, request_id: crypto.randomUUID().replaceAll("-", ""), ...playOptions, ...extra,
-    client_command_timestamp: Date.now() });
+    ...(wx ? {} : { client_command_timestamp: Date.now() }) });
   const response = await fetch(`${endpoint}?gsc=${encodeURIComponent(name)}`, {
     method: "POST",
-    headers: { ...DEMO_REQUEST_HEADERS, ...(cookie ? { cookie } : {}) },
+    headers: { ...(wx ? { "content-type": "text/plain" } : DEMO_REQUEST_HEADERS), ...(cookie ? { cookie } : {}) },
     body,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });

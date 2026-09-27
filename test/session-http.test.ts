@@ -108,3 +108,37 @@ test('官网启动配置直接连接官方试玩 API，不请求旧测试站', a
     assert.ok(urls.every(url => !url.includes('wxgame99.com')));
   } finally { globalThis.fetch = original; }
 });
+
+test('旧站单节点沿用历史试玩 API 与启动链接令牌', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSource = process.env.OAKS_SOURCE;
+  process.env.OAKS_SOURCE = 'wx';
+  try {
+    const urls: string[] = [];
+    globalThis.fetch = async (input, options) => {
+      const url = String(input);
+      urls.push(url);
+      if (urls.length === 1) return new Response(`})(window, ${JSON.stringify({
+        options: { queue: 'queue', token: 'page-token' },
+        desktop: { server_url: '//betman-demo.head.3oaks.com/betman-demo/gs/lucky_penny_2/desktop/{QUEUE}/demo/' },
+      })}, "//betman-demo.head.3oaks.com/betman-demo/game/runner_config/");`);
+      assert.equal(new Headers(options?.headers).get('origin'), null);
+      assert.equal(new Headers(options?.headers).get('content-type'), 'text/plain');
+      const body = JSON.parse(String(options?.body));
+      assert.equal(body.client_command_timestamp, undefined);
+      if (body.command === 'login') {
+        assert.equal(body.token, 'link-token');
+        return Response.json({ status: { code: 'OK' }, session_id: 'session', user: { huid: 'user' } });
+      }
+      return Response.json({ status: { code: 'OK' }, settings: {}, context: {} });
+    };
+    const session = await openSession({ playUrl: 'https://3oaks.ssgfivegame.com/api/v1/games/lucky_penny_2/play?token=link-token', betPerLine: 1, lines: 25, defaultBet: 25 } as any);
+    assert.equal(session.endpoint, 'https://3oaks-api.ssgfivegame.com/betman-demo/gs/lucky_penny_2/desktop/queue/demo/');
+    assert.equal(urls.length, 3);
+    assert.ok(urls.slice(1).every(url => url.startsWith(session.endpoint)));
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalSource === undefined) delete process.env.OAKS_SOURCE;
+    else process.env.OAKS_SOURCE = originalSource;
+  }
+});

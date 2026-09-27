@@ -80,6 +80,7 @@ test("单次采集不再被 500 局上限截断，由配额或本轮预算收工
 
 test("单节点真实采集限制一个进程、一个游戏，仍走正式入库链路", () => {
   assert.match(workflow, /fromJSON\(\(inputs.mode == 'single' \|\| inputs.mode == 'wx-single'\) && '\[1\]'/);
+  assert.match(workflow, /OAKS_BROWSER_TRANSPORT:.*inputs.mode == 'wx-single' && '0' \|\| '1'/);
   assert.match(workflow, /OAKS_THREADS:.*\(inputs.mode == 'single' \|\| inputs.mode == 'wx-single'\) && '1'/);
   assert.match(workflow, /OAKS_MAX_CLAIMS:.*\(inputs.mode == 'single' \|\| inputs.mode == 'wx-single'\) && '1'/);
   assert.match(worker, /preferredGames: \[process.env.OAKS_SINGLE_GAME\]/);

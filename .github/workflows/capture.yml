@@ -135,6 +135,7 @@ jobs:
       OAKS_THREADS: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single') && '1' || '4' }}
       OAKS_SINGLE_GAME: ${{ inputs.mode == 'wx-single' && 'lucky_penny_2' || inputs.mode == 'single' && 'egypt_power_x1000' || '' }}
       OAKS_SOURCE: ${{ inputs.mode == 'wx-single' && 'wx' || '' }}
+      OAKS_BROWSER_TRANSPORT: ${{ inputs.mode == 'wx-single' && '0' || '1' }}
       OAKS_BROWSER_CHANNEL: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single') && 'chrome' || '' }}
       OAKS_HEADER_DIAG: ${{ inputs.mode == 'single' && '1' || '' }}
     steps:

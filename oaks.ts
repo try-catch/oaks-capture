@@ -86,7 +86,7 @@ export function gameRegistrationUnavailable(error: unknown): boolean {
     || (error instanceof ProtocolStatusError && error.code === "GAME_NOT_ALLOWED");
 }
 
-async function openSessionWithRetry(
+export async function openSessionWithRetry(
   game: RegistryGame,
   definition: NonNullable<RegistryGame["discovery"]>,
   throttle: CaptureThrottle,
@@ -97,6 +97,8 @@ async function openSessionWithRetry(
       return await openSession(definition);
     } catch (error) {
       lastError = error;
+      // 协调器控制信号必须立即交回 worker，不能按会话故障重试。
+      if (error instanceof Error && ["ACTIONS_BUDGET", "ACTIONS_RATE_LIMIT", "ACTIONS_HALTED"].includes(error.message)) throw error;
       // 入口不存在或授权明确拒绝时，重试同一请求不会修复配置，停止该游戏并保留数据。
       if (permanentSessionError(error)) throw error;
       if (attempt > maxRetries) break;

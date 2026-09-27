@@ -8,6 +8,7 @@ import { CoordinatorChannel } from '../src/coordinator-channel';
 import { restoreData } from '../src/restore-data';
 import { countNdjsonLines } from '../src/ndjson-lines';
 import { browserFetch, closeBrowserTransport, fetchFailureDiagnostic } from '../src/browser-transport';
+import { ProtocolHttpError } from '../src/protocol';
 
 const root = path.resolve(__dirname, '..');
 const run = `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
@@ -198,9 +199,15 @@ function installDurability(): void {
     } catch (error) {
       realLog(JSON.stringify({ phase: 'protocol-fetch-error', slug, worker,
         ...fetchFailureDiagnostic(url, error), elapsedMs: Date.now() - fetchStarted }));
-      // 网络失败也要归还小型许可，避免偶发超时把全局许可永久占满。
-      rpc('response', { key, status: 0, usable: false, businessCode: 'FETCH_ERROR' });
-      throw error;
+      if (error instanceof ProtocolHttpError) {
+        // 启动页拒绝同样走下方 response 路径，不能丢掉 HTTP 状态和 Retry-After。
+        response = new Response(null, { status: error.status,
+          headers: { 'retry-after': String(Math.ceil(error.retryAfterMs / 1000)) } });
+      } else {
+        // 网络失败也要归还小型许可，避免偶发超时把全局许可永久占满。
+        rpc('response', { key, status: 0, usable: false, businessCode: 'FETCH_ERROR' });
+        throw error;
+      }
     }
     const body = Buffer.from(await response.arrayBuffer());
     timing.fetch += Date.now() - fetchStarted;

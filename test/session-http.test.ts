@@ -1,7 +1,32 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fetchText, openSession, ProtocolHttpError, ProtocolStatusError } from '../src/protocol';
-import { gameRegistrationUnavailable, permanentSessionError } from '../oaks';
+import { gameRegistrationUnavailable, permanentSessionError, openSessionWithRetry } from '../oaks';
+import { CaptureThrottle } from '../src/capture-throttle';
+import fs from 'node:fs';
+import path from 'node:path';
+
+test('会话建立立即传播协调器控制信号，不等待或重试', async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const code of ['ACTIONS_BUDGET', 'ACTIONS_RATE_LIMIT', 'ACTIONS_HALTED']) {
+      let calls = 0;
+      const error = new Error(code);
+      globalThis.fetch = async () => { calls++; throw error; };
+      await assert.rejects(openSessionWithRetry({ slug: 'grand' } as any,
+        { playUrl: 'https://3oaks.com/game/grand' } as any,
+        new CaptureThrottle({ spinDelayMs: 2000, fallbackSpinDelayMs: 2000 })), value => value === error);
+      assert.equal(calls, 1);
+    }
+  } finally { globalThis.fetch = original; }
+});
+
+test('worker 将启动页 HTTP 异常送入统一响应处理，保留限流秒数', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../actions/worker.ts'), 'utf8');
+  assert.match(source, /if \(error instanceof ProtocolHttpError\)\s*\{[\s\S]*?response = new Response\(null, \{ status: error.status,/);
+  assert.match(source, /'retry-after': String\(Math.ceil\(error.retryAfterMs \/ 1000\)\)/);
+  assert.match(source, /retryAfter: headers\['retry-after'\] \?\? ''/);
+});
 
 test('启动页 HTTP 错误保留状态和 Retry-After，不能泄露 URL token', async () => {
   const original = globalThis.fetch;

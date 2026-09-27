@@ -64,6 +64,19 @@ class RecoveryTests(unittest.TestCase):
         second = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False)
         self.assertEqual(second['slug'], 'two')
 
+    def test_single_shard_never_assigns_same_game_to_another_process(self):
+        atomic(self.root / 'games/registry.json', {'games': [
+            {'slug': 'one', 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}},
+        ]})
+        self.call('end')
+        self.call('begin', threads=4, nodes=20, maxClaims=24, maxShards=1)
+        first = self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.0'}, check_legacy=False)
+        self.assertEqual(first['slug'], 'one')
+        for worker in ['1.1', '2.0']:
+            result = self.store.call({'op': 'claim', 'run': '100-1', 'worker': worker}, check_legacy=False)
+            self.assertIn('wait', result)
+        self.assertEqual(len(read(self.store.state_path)['claims']), 1)
+
     def test_purchase_modes_split_exactly_across_two_different_nodes(self):
         atomic(self.root / 'games/registry.json', {'games': [
             {'slug': 'one', 'discovery': {'settings': {'buyBonusPrices': {'1': 50}, 'boosterPrices': {'1': 2}}}},

@@ -500,6 +500,8 @@ class Store:
                 return self.grant_claim(state, req, worker, node, slug, slug, True, 1)
 
             for slug in mode_games:
+                if state['topology']['maxShards'] < 2:
+                    break
                 quota = state.get('modeQuotas', {}).get(slug, {})
                 primary = state['claims'].get(slug)
                 secondary_key = slug + '#2'

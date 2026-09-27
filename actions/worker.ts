@@ -83,9 +83,8 @@ function numberFromEnv(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 function activeThreads(): number {
-  const nodes = numberFromEnv('OAKS_NODES', 1);
-  const maxClaims = numberFromEnv('OAKS_MAX_CLAIMS', 24);
-  return Math.min(numberFromEnv('OAKS_THREADS', 8), Math.ceil(maxClaims / nodes));
+  // 进程池大小与活跃会话预算分离；空闲进程由协调器退避等待。
+  return Math.min(4, Math.floor(numberFromEnv('OAKS_THREADS', 4)));
 }
 async function discoverEgress(): Promise<string> {
   let lastError: unknown;

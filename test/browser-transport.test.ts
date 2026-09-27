@@ -22,7 +22,8 @@ test('网络失败诊断区分阶段且不泄露URL或异常内容', () => {
 test('原生浏览器传输保留响应、限速头并隔离客户端请求头', async () => {
   const original = chromium.launch;
   let launches = 0, closes = 0, status = 200;
-  let fail = false;
+  let fail = false, failedStatus = 403;
+  let lateHeaders = false;
   const listeners = new Map<string, (request: any) => void>();
   const networkListeners = new Map<string, (event: any) => void>();
   let detached = 0;
@@ -41,8 +42,7 @@ test('原生浏览器传输保留响应、限速头并隔离客户端请求头',
     goto: async () => ({ ok: () => true }),
     waitForResponse: async () => {
       if (fail) {
-        await new Promise(resolve => setImmediate(resolve));
-        throw new Error('page.waitForResponse: Timeout 20000ms secret');
+        return await new Promise<any>(() => {}); // 没有 response 事件，必须由网络失败路径结束。
       }
       return ({
       allHeaders: async () => ({ 'retry-after': '3600', 'content-type': 'application/json', 'content-encoding': 'gzip', 'content-length': '12', 'set-cookie': 'demo=one; Path=/\nother=two; Path=/' }),
@@ -52,12 +52,15 @@ test('原生浏览器传输保留响应、限速头并隔离客户端请求头',
       sent = request;
       if (fail) {
         networkListeners.get('Network.requestWillBeSent')?.({ requestId: 'one', request: { url: request.url, method: request.method } });
-        networkListeners.get('Network.responseReceivedExtraInfo')?.({ requestId: 'one', statusCode: 403 });
-        networkListeners.get('Network.loadingFailed')?.({ requestId: 'one', errorText: 'net::ERR_CONNECTION_RESET', corsErrorStatus: { corsError: 'MissingAllowOriginHeader' } });
+        const extra = () => networkListeners.get('Network.responseReceivedExtraInfo')?.({ requestId: 'one', statusCode: failedStatus, headers: { 'Retry-After': '3600' } });
+        if (!lateHeaders) extra();
         const native = { url: () => request.url, method: () => request.method,
           failure: () => ({ errorText: 'net::ERR_CONNECTION_RESET' }) };
         listeners.get('request')?.(native);
         listeners.get('requestfailed')?.(native);
+        networkListeners.get('Network.loadingFailed')?.({ requestId: 'one', errorText: 'net::ERR_CONNECTION_RESET',
+          corsErrorStatus: failedStatus ? { corsError: 'MissingAllowOriginHeader' } : undefined });
+        if (lateHeaders) extra();
         return 'type_error';
       }
       return 'resolved';
@@ -93,16 +96,26 @@ test('原生浏览器传输保留响应、限速头并隔离客户端请求头',
     await browserFetch('https://3oaks.com/');
     assert.equal(launches, 2);
     fail = true;
+    const denied = await browserFetch('https://3oaks.com/?gsc=login&token=secret');
+    assert.equal(denied.status, 403);
+    assert.equal(await denied.text(), '');
+    failedStatus = 429;
+    lateHeaders = true;
+    const corsLimited = await browserFetch('https://3oaks.com/?gsc=login&token=secret');
+    assert.equal(corsLimited.status, 429);
+    assert.equal(corsLimited.headers.get('retry-after'), '3600');
+    failedStatus = 0;
+    lateHeaders = false;
     await assert.rejects(browserFetch('https://3oaks.com/?gsc=login&token=secret'), error => {
       assert.deepEqual(fetchFailureDiagnostic('https://3oaks.com/?gsc=login', error), {
-        command: 'login', kind: 'response_timeout', network: 'net::ERR_CONNECTION_RESET',
+        command: 'login', kind: 'fetch_failed', network: 'net::ERR_CONNECTION_RESET',
         pageFetch: 'type_error', requestSeen: true,
-        httpStatus: 403, cors: 'MissingAllowOriginHeader', blocked: 'none',
+        httpStatus: 0, cors: 'none', blocked: 'none',
       });
       return true;
     });
     assert.equal(listeners.size, 0);
     assert.equal(networkListeners.size, 0);
-    assert.equal(detached, 4);
+    assert.equal(detached, 6);
   } finally { await closeBrowserTransport(); chromium.launch = original; }
 });

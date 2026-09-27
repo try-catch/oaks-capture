@@ -26,12 +26,13 @@ test("CAPTURE_ENABLED 是硬门禁，且推送触发只认专用文件", () => {
 });
 
 test("单个节点按线程数并发，节点数与矩阵一致", () => {
-  assert.match(workflow, /OAKS_THREADS:\s*'8'/);
+  assert.match(workflow, /OAKS_THREADS:\s*'4'/);
   assert.match(workflow, /OAKS_NODES:\s*'20'/);
   // 官网出现跨出口 429 后降低单会话速率，同时保留 24 会话硬上限。
-  assert.match(workflow, /OAKS_SPIN_DELAY_MS:\s*'1800'/);
+  assert.match(workflow, /OAKS_SPIN_DELAY_MS:\s*'2000'/);
+  assert.match(workflow, /OAKS_REQUEST_TIMEOUT_MS:\s*'20000'/);
   assert.match(workflow, /OAKS_NODE_SPACING_MS:\s*'3000'/);
-  assert.match(workflow, /OAKS_SHARDS_PER_GAME:\s*'2'/);
+  assert.match(workflow, /OAKS_SHARDS_PER_GAME:\s*'1'/);
   assert.match(workflow, /OAKS_CLAIM_START_SPACING_MS:\s*'15000'/);
   assert.match(workflow, /max-parallel:\s*20/);
   const matrix = workflow.match(/worker:\s*\[([^\]]+)\]/)?.[1] ?? "";

@@ -66,6 +66,18 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
     for (const name of ['origin', 'referer', 'cookie', 'user-agent', 'host', 'content-length', 'accept-encoding']) headers.delete(name);
     const body = options.body as string | undefined;
     const diagnostic = { network: 'none', pageFetch: 'pending', requestSeen: false, httpStatus: 0, cors: 'none', blocked: 'none' };
+    let failed = false, retryAfter = '';
+    let resolveFailure!: (response: Response) => void;
+    let rejectFailure!: (error: Error) => void;
+    const failure = new Promise<Response>((resolve, reject) => { resolveFailure = resolve; rejectFailure = reject; });
+    const settleFailure = () => {
+      if (!failed || (!diagnostic.httpStatus && diagnostic.cors !== 'none')) return;
+      // 只恢复失败状态及限速头，不读取或放行被 CORS 拦截的成功响应。
+      if (diagnostic.httpStatus >= 400) resolveFailure(new Response(null, {
+        status: diagnostic.httpStatus, headers: retryAfter ? { 'retry-after': retryAfter } : {},
+      }));
+      else rejectFailure(new TypeError('fetch failed'));
+    };
     // CORS 拒绝时 Playwright 可能没有 response 事件；只取原生网络元数据，不输出地址、头或正文。
     const network = await page.context().newCDPSession(page);
     const requestIds = new Set<string>();
@@ -73,7 +85,10 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
       if (event.request.url === url && event.request.method === method) requestIds.add(event.requestId);
     });
     network.on('Network.responseReceivedExtraInfo', event => {
-      if (requestIds.has(event.requestId)) diagnostic.httpStatus = event.statusCode;
+      if (!requestIds.has(event.requestId)) return;
+      diagnostic.httpStatus = event.statusCode;
+      retryAfter = String(Object.entries(event.headers ?? {}).find(([key]) => key.toLowerCase() === 'retry-after')?.[1] ?? '');
+      settleFailure();
     });
     network.on('Network.loadingFailed', event => {
       if (!requestIds.has(event.requestId)) return;
@@ -86,6 +101,8 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
       diagnostic.blocked = !blocked ? 'none' : ['csp', 'mixed-content', 'origin', 'inspector',
         'subresource-filter', 'other'].includes(blocked) ? blocked : 'other_blocked';
       console.error(JSON.stringify({ phase: 'browser-network-failure', command: fetchFailureDiagnostic(url, null).command, ...diagnostic }));
+      failed = true;
+      settleFailure();
     });
     const matches = (request: BrowserRequest) => request.url() === url && request.method() === method;
     const onRequest = (request: BrowserRequest) => { if (matches(request)) diagnostic.requestSeen = true; };
@@ -96,7 +113,7 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
     page.on('requestfailed', onFailed);
     try {
     await network.send('Network.enable');
-    const [response] = await Promise.all([
+    const result = await Promise.race([failure, Promise.all([
       page.waitForResponse(response => response.url() === url && response.request().method() === method,
         { timeout: REQUEST_TIMEOUT_MS }),
       page.evaluate(async request => {
@@ -113,7 +130,9 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
         }
       }, { url, method, headers: Object.fromEntries(headers), body, timeout: REQUEST_TIMEOUT_MS })
         .then(result => { diagnostic.pageFetch = result; }),
-    ]);
+    ])]);
+    if (result instanceof Response) return result;
+    const [response] = result;
     // 页面 JS 不能读取未被 CORS 暴露的 Retry-After；从原生网络响应保留全部限速头。
     const responseHeaders = await response.allHeaders();
     delete responseHeaders['content-encoding'];
@@ -133,6 +152,8 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
       page.off('requestfailed', onFailed);
       // 超时可能同时关闭浏览器；清理不能卡住原始失败及 done/end 回写。
       void network.detach().catch(() => {});
+      // 取消已不可能收到响应的监听等待；失败浏览器不留给下一次请求。
+      if (failed) void closeBrowserTransport();
     }
   } finally {
     options.signal?.removeEventListener('abort', abort);

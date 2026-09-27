@@ -267,6 +267,7 @@ export async function syncModeCountsFromMongo(collection: any, counts: Record<nu
 export interface CaptureGameOptions {
   partialModeQuota?: boolean;
   skipMongoSync?: boolean;
+  flushEveryRound?: boolean;
 }
 
 export async function captureGame(
@@ -442,7 +443,7 @@ export async function captureGame(
           // GitHub Runner 先聚合写入，再通过一条 bulkWrite 落到测试服 Mongo。
           // 官方请求并发不变，同时把服务端每局一次写命令压缩为每 25 局一次。
           mongoBatch.push(document);
-          if (mongoBatch.length >= 25) await flushMongoBatch();
+          if (options.flushEveryRound || mongoBatch.length >= 25) await flushMongoBatch();
         } else if (collection) {
           const mongoStarted = Date.now();
           await upsertMongoRound(collection, document);

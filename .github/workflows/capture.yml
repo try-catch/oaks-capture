@@ -40,21 +40,23 @@ env:
   # 同节点实测 Node 被拒绝而原生 Chromium 可用；原有许可、限速和配额仍在外层执行。
   OAKS_BROWSER_TRANSPORT: '1'
   # 单节点线程数、节点数、请求间隔必须与服务商书面授权允许的并发一致。
-  OAKS_THREADS: '8'
+  OAKS_THREADS: '4'
   OAKS_NODES: '20'
   # 原生浏览器单节点 3000ms 探针通过；800ms 批量出现 429，先复用已验证的保守节奏。
   OAKS_NODE_SPACING_MS: '3000'
   OAKS_THROTTLE_LIMIT: '6'
   OAKS_DEADLINE_MINUTES: '45'
   # 官网入口出现跨出口 429 后先保守降速；仍按 Retry-After 退避，不放宽并发门禁。
-  OAKS_SPIN_DELAY_MS: '1800'
+  OAKS_SPIN_DELAY_MS: '2000'
+  OAKS_REQUEST_TIMEOUT_MS: '20000'
+  OAKS_NETWORK_TIMEOUT_MS: '20000'
   # 24 是历史压测的吞吐最优点；60 个会话会让共享测试服连续触发 CPU PSI 保护停轮。
-  # 每节点仍只按预算启动 2 个 worker，全局活跃游戏硬限制为 24。
+  # 每节点 4 个独立进程；空闲进程等待，全局活跃游戏硬限制为 24。
   OAKS_MAX_CLAIMS: '24'
   # 不同时恢复 24 款历史数据；每 15 秒启动一个游戏会话，降低测试服 CPU 峰值。
   OAKS_CLAIM_START_SPACING_MS: '15000'
-  # 购买/加注缺口由两个不同 Runner 节点分片；总会话数仍固定为 24。
-  OAKS_SHARDS_PER_GAME: '2'
+  # 同一个游戏只能由一个进程认领，避免跨节点重复采集。
+  OAKS_SHARDS_PER_GAME: '1'
   # 常驻长连接：单次协调往返从 1-2 秒降到毫秒级。1 启用，0 关闭。
   OAKS_PERSISTENT_CHANNEL: '1'
 

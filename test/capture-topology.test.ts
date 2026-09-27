@@ -20,16 +20,14 @@ function envValue(name: string): string {
   return match![1].trim();
 }
 
-test("20 个节点只保留全局会话预算所需的 worker 子进程", () => {
+test("20 个节点各启动四个 worker，但活跃会话预算保持独立", () => {
   const nodes = Number(envValue("OAKS_NODES").replace(/['"]/g, ""));
   const maxClaims = Number(envValue("OAKS_MAX_CLAIMS").replace(/['"]/g, ""));
   const authorizedThreads = Number(envValue("OAKS_THREADS").replace(/['"]/g, ""));
   assert.equal(nodes, 20);
   assert.equal(maxClaims, 24);
-  // OAKS_THREADS 是与服务商书面授权的上限，不是每节点实际要 fork 的子进程数。
-  // 实际值必须收敛到 ceil(maxClaims / nodes)：20 节点 × 24 会话 = 每节点 2 个。
-  assert.equal(Math.min(authorizedThreads, Math.ceil(maxClaims / nodes)), 2);
-  assert.match(worker, /Math\.min\(numberFromEnv\('OAKS_THREADS', 8\), Math\.ceil\(maxClaims \/ nodes\)\)/);
+  assert.equal(authorizedThreads, 4);
+  assert.match(worker, /Math\.min\(4, Math\.floor\(numberFromEnv\('OAKS_THREADS', 4\)\)\)/);
   assert.doesNotMatch(worker, /const threads = numberFromEnv\('OAKS_THREADS', 8\)/);
   // 两条启动路径都必须走收敛后的线程数：supervise 产子进程、begin 上报预算。
   assert.ok((worker.match(/activeThreads\(\)/g) ?? []).length >= 3, "activeThreads 未覆盖全部启动路径");

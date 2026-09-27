@@ -15,6 +15,7 @@ export function safeNetworkFailure(value: string | undefined): string {
 
 // 只比较协议相关的固定元信息；令牌、Cookie、完整 URL 和原始 UA 不进入日志。
 export function requestMetadata(headers: Record<string, string>): Record<string, string> {
+  headers = Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
   const host = (value: string | undefined) => {
     try { return value ? new URL(value).hostname : 'none'; } catch { return 'invalid'; }
   };
@@ -96,8 +97,24 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
     // CORS 拒绝时 Playwright 可能没有 response 事件；只取原生网络元数据，不输出地址、头或正文。
     const network = await page.context().newCDPSession(page);
     const requestIds = new Set<string>();
+    const pendingHeaders = new Map<string, Record<string, string>>();
+    const reportWireHeaders = (id: string, value: Record<string, string>) => {
+      if (process.env.OAKS_HEADER_DIAG === '1' && target.searchParams.get('gsc') === 'login') {
+        console.error(JSON.stringify({ phase: 'wire-request-metadata', command: 'login', ...requestMetadata(value) }));
+      }
+      pendingHeaders.delete(id);
+    };
     network.on('Network.requestWillBeSent', event => {
-      if (event.request.url === url && event.request.method === method) requestIds.add(event.requestId);
+      if (event.request.url === url && event.request.method === method) {
+        requestIds.add(event.requestId);
+        const value = pendingHeaders.get(event.requestId);
+        if (value) reportWireHeaders(event.requestId, value);
+      }
+    });
+    network.on('Network.requestWillBeSentExtraInfo', event => {
+      const value = Object.fromEntries(Object.entries(event.headers ?? {}).map(([key, item]) => [key, String(item)]));
+      if (requestIds.has(event.requestId)) reportWireHeaders(event.requestId, value);
+      else pendingHeaders.set(event.requestId, value);
     });
     network.on('Network.responseReceivedExtraInfo', event => {
       if (!requestIds.has(event.requestId)) return;

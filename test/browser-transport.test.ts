@@ -7,6 +7,9 @@ test('请求诊断只保留来源主机和固定协议字段', () => {
   assert.deepEqual(requestMetadata({origin:'https://3oaks.com',referer:'https://3oaks.com/game/grand?token=secret',
     'content-type':'text/plain','sec-fetch-site':'cross-site','user-agent':'Chrome/142 token=secret',cookie:'secret'}),
     {origin:'3oaks.com',referer:'3oaks.com',contentType:'text/plain',fetchSite:'cross-site',browserMajor:'142'});
+  assert.deepEqual(requestMetadata({Origin:'https://3oaks.com',Referer:'https://3oaks.com/',
+    'Content-Type':'text/plain','Sec-Fetch-Site':'same-site','User-Agent':'Chrome/153'}),
+    {origin:'3oaks.com',referer:'3oaks.com',contentType:'text/plain',fetchSite:'same-site',browserMajor:'153'});
 });
 
 test('网络失败诊断区分阶段且不泄露URL或异常内容', () => {

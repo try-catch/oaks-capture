@@ -264,8 +264,7 @@ async function runThread(): Promise<void> {
   const { captureGame, gameRegistrationUnavailable, recoverableRoundError } = await import('../oaks');
   const registry = await readRegistry();
   installDurability();
-  if (process.env.OAKS_SOURCE === 'wx' && !process.env.OAKS_SINGLE_GAME) throw new Error('WX_SOURCE_REQUIRES_SINGLE_GAME');
-  if (process.env.OAKS_SOURCE === 'wx') {
+  if (process.env.OAKS_SOURCE === 'wx' && process.env.OAKS_SINGLE_GAME) {
     process.argv = [process.execPath, __filename, '--rounds', '1', '--normal-rounds', '0', '--target-per-mode', '10000', '--mode-types', '2'];
   }
   deadline = Date.now() + numberFromEnv('OAKS_DEADLINE_MINUTES', 40) * 60_000;

@@ -7,7 +7,7 @@ on:
       mode:
         description: check 验证部署；probe 单节点验证试玩会话；capture 执行真实采集
         type: choice
-        options: [check, capture, probe, single, compare, wx-single]
+        options: [check, capture, probe, single, compare, wx-single, wx-capture]
         default: check
   # 定时采集已停止（2026-09-13 交由 Codex 接手）。需要恢复时取消注释即可。
   # schedule:
@@ -90,7 +90,7 @@ jobs:
           REQUESTED_MODE: ${{ inputs.mode }}
           CAPTURE_ENABLED: ${{ vars.CAPTURE_ENABLED }}
         run: |
-          if [[ "$CAPTURE_ENABLED" == true && ( "$GITHUB_EVENT_NAME" == schedule || "$GITHUB_EVENT_NAME" == push || "$REQUESTED_MODE" == capture || "$REQUESTED_MODE" == single || "$REQUESTED_MODE" == wx-single ) ]]; then
+          if [[ "$CAPTURE_ENABLED" == true && ( "$GITHUB_EVENT_NAME" == schedule || "$GITHUB_EVENT_NAME" == push || "$REQUESTED_MODE" == capture || "$REQUESTED_MODE" == single || "$REQUESTED_MODE" == wx-single || "$REQUESTED_MODE" == wx-capture ) ]]; then
             node -r ts-node/register actions/worker.ts begin
             # 仓库变量值 true 会被 GitHub 当作敏感值屏蔽；job output 若同值会被直接丢弃。
             echo 'capture=run' >> "$GITHUB_OUTPUT"
@@ -134,9 +134,9 @@ jobs:
       OAKS_WORKER: ${{ matrix.worker }}
       OAKS_THREADS: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single') && '1' || '4' }}
       OAKS_SINGLE_GAME: ${{ inputs.mode == 'wx-single' && 'lucky_penny_2' || inputs.mode == 'single' && 'egypt_power_x1000' || '' }}
-      OAKS_SOURCE: ${{ inputs.mode == 'wx-single' && 'wx' || '' }}
-      OAKS_BROWSER_TRANSPORT: ${{ inputs.mode == 'wx-single' && '0' || '1' }}
-      OAKS_BROWSER_CHANNEL: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single') && 'chrome' || '' }}
+      OAKS_SOURCE: ${{ (inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && 'wx' || '' }}
+      OAKS_BROWSER_TRANSPORT: ${{ (inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && '0' || '1' }}
+      OAKS_BROWSER_CHANNEL: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && 'chrome' || '' }}
       OAKS_HEADER_DIAG: ${{ inputs.mode == 'single' && '1' || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -146,7 +146,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npx playwright install --with-deps ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single') && 'chrome' || 'chromium' }}
+      - run: npx playwright install --with-deps ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && 'chrome' || 'chromium' }}
       - run: python3 actions/setup-ssh.py
       - name: Confirm GitHub-hosted Linux execution
         run: |

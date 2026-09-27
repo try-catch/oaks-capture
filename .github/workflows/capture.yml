@@ -7,7 +7,7 @@ on:
       mode:
         description: check 验证部署；probe 单节点验证试玩会话；capture 执行真实采集
         type: choice
-        options: [check, capture, probe]
+        options: [check, capture, probe, single]
         default: check
   # 定时采集已停止（2026-09-13 交由 Codex 接手）。需要恢复时取消注释即可。
   # schedule:
@@ -65,6 +65,11 @@ jobs:
     if: github.repository == 'try-catch/oaks-capture' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      OAKS_THREADS: ${{ inputs.mode == 'single' && '1' || '4' }}
+      OAKS_NODES: ${{ inputs.mode == 'single' && '1' || '20' }}
+      OAKS_MAX_CLAIMS: ${{ inputs.mode == 'single' && '1' || '24' }}
+      OAKS_SINGLE_GAME: ${{ inputs.mode == 'single' && 'egypt_power_x1000' || '' }}
     outputs:
       capture: ${{ steps.mode.outputs.capture }}
     steps:
@@ -85,7 +90,7 @@ jobs:
           REQUESTED_MODE: ${{ inputs.mode }}
           CAPTURE_ENABLED: ${{ vars.CAPTURE_ENABLED }}
         run: |
-          if [[ "$CAPTURE_ENABLED" == true && ( "$GITHUB_EVENT_NAME" == schedule || "$GITHUB_EVENT_NAME" == push || "$REQUESTED_MODE" == capture ) ]]; then
+          if [[ "$CAPTURE_ENABLED" == true && ( "$GITHUB_EVENT_NAME" == schedule || "$GITHUB_EVENT_NAME" == push || "$REQUESTED_MODE" == capture || "$REQUESTED_MODE" == single ) ]]; then
             node -r ts-node/register actions/worker.ts begin
             # 仓库变量值 true 会被 GitHub 当作敏感值屏蔽；job output 若同值会被直接丢弃。
             echo 'capture=run' >> "$GITHUB_OUTPUT"
@@ -121,9 +126,11 @@ jobs:
       fail-fast: false
       max-parallel: 20
       matrix:
-        worker: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        worker: ${{ fromJSON(inputs.mode == 'single' && '[1]' || '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]') }}
     env:
       OAKS_WORKER: ${{ matrix.worker }}
+      OAKS_THREADS: ${{ inputs.mode == 'single' && '1' || '4' }}
+      OAKS_SINGLE_GAME: ${{ inputs.mode == 'single' && 'egypt_power_x1000' || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

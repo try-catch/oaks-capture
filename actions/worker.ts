@@ -281,6 +281,11 @@ async function runThread(): Promise<void> {
       continue;
     }
     slug = claimed.slug;
+    // 单节点验收只允许指定游戏；认领不匹配时不发官网请求，也不切换游戏。
+    if (process.env.OAKS_SINGLE_GAME && slug !== process.env.OAKS_SINGLE_GAME) {
+      rpc('done', { status: 'paused', reason: 'SINGLE_GAME_MISMATCH' });
+      throw new Error('SINGLE_GAME_MISMATCH');
+    }
     deadline = claimed.deadline;
     specialOnly = claimed.specialOnly === true;
     shardIndex = Number(claimed.shardIndex ?? 0);
@@ -366,6 +371,7 @@ async function runThread(): Promise<void> {
       }
       console.log(JSON.stringify({ worker, slug, status, count, reason }));
     }
+    if (process.env.OAKS_SINGLE_GAME) break;
     if (!stopping) await new Promise(resolve => setTimeout(resolve, numberFromEnv('OAKS_GAME_SWITCH_DELAY_MS', 10_000)));
   }
 }
@@ -468,6 +474,7 @@ async function main(): Promise<void> {
       githubToken: process.env.OAKS_GITHUB_TOKEN,
       threads,
       nodes,
+      ...(process.env.OAKS_SINGLE_GAME ? { preferredGames: [process.env.OAKS_SINGLE_GAME] } : {}),
       nodeMs: numberFromEnv('OAKS_NODE_SPACING_MS', 250),
       // 双线程出口不能因首个 429 就整节点熔断；全局 Retry-After 仍由协调器执行。
       throttleLimit: Math.min(threads, numberFromEnv('OAKS_THROTTLE_LIMIT', 4), Math.max(2, Math.ceil(threads / 2))),

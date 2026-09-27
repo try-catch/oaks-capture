@@ -11,7 +11,7 @@ const coordinator = fs.readFileSync(path.join(root, "actions", "coordinator.py")
 test("定时检查为每二十分钟一次且保留手工 check/capture/probe 入口", () => {
   assert.match(workflow, /-\s*cron:\s*'\*\/20 \* \* \* \*'/);
   assert.doesNotMatch(workflow, /cron:\s*'17 \* \* \* \*'/);
-  assert.match(workflow, /options:\s*\[check, capture, probe\]/);
+  assert.match(workflow, /options:\s*\[check, capture, probe, single\]/);
   assert.match(workflow, /run: node -r ts-node\/register actions\/worker\.ts probe/);
   assert.match(workflow, /inputs\.mode == 'probe' && vars\.CAPTURE_ENABLED == 'true'/);
 });
@@ -35,7 +35,7 @@ test("单个节点按线程数并发，节点数与矩阵一致", () => {
   assert.match(workflow, /OAKS_SHARDS_PER_GAME:\s*'1'/);
   assert.match(workflow, /OAKS_CLAIM_START_SPACING_MS:\s*'15000'/);
   assert.match(workflow, /max-parallel:\s*20/);
-  const matrix = workflow.match(/worker:\s*\[([^\]]+)\]/)?.[1] ?? "";
+  const matrix = workflow.match(/\|\| '\[([^\]]+)\]'/)?.[1] ?? "";
   assert.equal(matrix.split(",").length, 20);
   // 每节点子进程数必须按全局会话预算收敛，不能直接用授权线程数。
   assert.match(worker, /const threads = activeThreads\(\)/);
@@ -49,7 +49,7 @@ test("定时采集与链式续跑处于停止状态（2026-09-13 交由 Codex �
   assert.match(workflow, /# schedule:/);
   assert.match(workflow, /# - name: 链式派发下一轮采集/);
   // 手工入口仍保留：workflow_dispatch 与专用文件推送。
-  assert.match(workflow, /options:\s*\[check, capture, probe\]/);
+  assert.match(workflow, /options:\s*\[check, capture, probe, single\]/);
   assert.match(workflow, /capture-trigger\.json/);
 });
 
@@ -76,6 +76,19 @@ test("begin 把线程与节点拓扑交给协调器作为并发预算", () => {
 test("单次采集不再被 500 局上限截断，由配额或本轮预算收工", () => {
   assert.match(worker, /'--rounds', '1000000'/);
   assert.doesNotMatch(worker, /'--rounds', '500'/);
+});
+
+test("单节点真实采集限制一个进程、一个游戏，仍走正式入库链路", () => {
+  assert.match(workflow, /fromJSON\(inputs.mode == 'single' && '\[1\]'/);
+  assert.match(workflow, /OAKS_THREADS:.*inputs.mode == 'single' && '1'/);
+  assert.match(workflow, /OAKS_MAX_CLAIMS:.*inputs.mode == 'single' && '1'/);
+  assert.match(worker, /preferredGames: \[process.env.OAKS_SINGLE_GAME\]/);
+  assert.match(worker, /SINGLE_GAME_MISMATCH/);
+  assert.match(worker, /if \(process.env.OAKS_SINGLE_GAME\) break;/);
+  const registry = JSON.parse(fs.readFileSync(path.join(root, 'games/registry.json'), 'utf8'));
+  const settings = registry.games.find((game: any) => game.slug === 'egypt_power_x1000').discovery.settings;
+  assert.ok(Object.keys(settings.buyBonusPrices).length > 0);
+  assert.ok(Object.keys(settings.boosterPrices).length > 0);
 });
 
 test("官方请求仍受节点间隔、Retry-After 与全局暂停约束", () => {

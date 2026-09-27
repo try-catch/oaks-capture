@@ -102,6 +102,9 @@ jobs:
     if: needs.prepare.result == 'success' && (inputs.mode == 'probe' || inputs.mode == 'compare') && vars.CAPTURE_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      OAKS_BROWSER_CHANNEL: ${{ inputs.mode == 'compare' && 'chrome' || '' }}
+      OAKS_HEADER_DIAG: ${{ inputs.mode == 'compare' && '1' || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -110,7 +113,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps ${{ inputs.mode == 'compare' && 'chrome' || 'chromium' }}
       - run: python3 actions/setup-ssh.py
       - run: node -r ts-node/register actions/worker.ts ${{ inputs.mode }}
         env:
@@ -131,6 +134,8 @@ jobs:
       OAKS_WORKER: ${{ matrix.worker }}
       OAKS_THREADS: ${{ inputs.mode == 'single' && '1' || '4' }}
       OAKS_SINGLE_GAME: ${{ inputs.mode == 'single' && 'egypt_power_x1000' || '' }}
+      OAKS_BROWSER_CHANNEL: ${{ inputs.mode == 'single' && 'chrome' || '' }}
+      OAKS_HEADER_DIAG: ${{ inputs.mode == 'single' && '1' || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -139,7 +144,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps ${{ inputs.mode == 'single' && 'chrome' || 'chromium' }}
       - run: python3 actions/setup-ssh.py
       - name: Confirm GitHub-hosted Linux execution
         run: |

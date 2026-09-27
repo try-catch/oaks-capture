@@ -13,6 +13,20 @@ export function safeNetworkFailure(value: string | undefined): string {
     ? value! : value ? 'other_network_failure' : 'none';
 }
 
+// 只比较协议相关的固定元信息；令牌、Cookie、完整 URL 和原始 UA 不进入日志。
+export function requestMetadata(headers: Record<string, string>): Record<string, string> {
+  const host = (value: string | undefined) => {
+    try { return value ? new URL(value).hostname : 'none'; } catch { return 'invalid'; }
+  };
+  const site = headers['sec-fetch-site'] ?? '';
+  return {
+    origin: host(headers.origin), referer: host(headers.referer),
+    contentType: headers['content-type'] === 'text/plain' ? 'text/plain' : 'other',
+    fetchSite: ['same-origin', 'same-site', 'cross-site', 'none'].includes(site) ? site : 'missing',
+    browserMajor: /Chrome\/(\d+)/.exec(headers['user-agent'] ?? '')?.[1] ?? 'other',
+  };
+}
+
 // 公开诊断只输出白名单阶段与固定类别，不携带 URL、令牌或原始异常。
 export function fetchFailureDiagnostic(url: string, error: unknown): { command: string; kind: string } {
   let command = 'unknown';
@@ -29,7 +43,8 @@ export function fetchFailureDiagnostic(url: string, error: unknown): { command: 
 
 async function browserPage(): Promise<Page> {
   session ??= (async () => {
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless: true,
+      ...(process.env.OAKS_BROWSER_CHANNEL === 'chrome' ? { channel: 'chrome' as const } : {}) });
     try {
       const context = await browser.newContext();
       const page = await context.newPage();
@@ -105,7 +120,14 @@ export const browserFetch: typeof fetch = async (input, options = {}) => {
       settleFailure();
     });
     const matches = (request: BrowserRequest) => request.url() === url && request.method() === method;
-    const onRequest = (request: BrowserRequest) => { if (matches(request)) diagnostic.requestSeen = true; };
+    const onRequest = (request: BrowserRequest) => {
+      if (!matches(request)) return;
+      diagnostic.requestSeen = true;
+      if (process.env.OAKS_HEADER_DIAG === '1' && target.searchParams.get('gsc') === 'login') {
+        void request.allHeaders().then(value => console.error(JSON.stringify({ phase: 'request-metadata',
+          command: 'login', ...requestMetadata(value) }))).catch(() => {});
+      }
+    };
     const onFailed = (request: BrowserRequest) => {
       if (matches(request)) diagnostic.network = safeNetworkFailure(request.failure()?.errorText);
     };

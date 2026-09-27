@@ -1,9 +1,11 @@
 import crypto from 'node:crypto';
 import { chromium } from 'playwright';
+import { requestMetadata } from '../src/browser-transport';
 
 // 单节点对照诊断：使用原生 Chromium，不修改指纹、不复用外部 Cookie，也不允许旋转。
 export async function probeBrowserSession(slug: string, rpc: (op: string, data?: Record<string, unknown>) => any): Promise<void> {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true,
+    ...(process.env.OAKS_BROWSER_CHANNEL === 'chrome' ? { channel: 'chrome' as const } : {}) });
   const context = await browser.newContext();
   const page = await context.newPage();
   const requests = new Map<object, string>();
@@ -22,6 +24,10 @@ export async function probeBrowserSession(slug: string, rpc: (op: string, data?:
         await route.abort(); return;
       }
       commands.add(command);
+      if (process.env.OAKS_HEADER_DIAG === '1' && command === 'login') {
+        console.log(JSON.stringify({ phase: 'official-page-metadata', command,
+          ...requestMetadata(await request.allHeaders()) }));
+      }
       const key = crypto.randomBytes(32).toString('hex');
       try {
         while (!settled) {

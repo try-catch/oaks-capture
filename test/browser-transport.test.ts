@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
-import { browserFetch, closeBrowserTransport, fetchFailureDiagnostic, safeNetworkFailure } from '../src/browser-transport';
+import { browserFetch, closeBrowserTransport, fetchFailureDiagnostic, requestMetadata, safeNetworkFailure } from '../src/browser-transport';
+
+test('请求诊断只保留来源主机和固定协议字段', () => {
+  assert.deepEqual(requestMetadata({origin:'https://3oaks.com',referer:'https://3oaks.com/game/grand?token=secret',
+    'content-type':'text/plain','sec-fetch-site':'cross-site','user-agent':'Chrome/142 token=secret',cookie:'secret'}),
+    {origin:'3oaks.com',referer:'3oaks.com',contentType:'text/plain',fetchSite:'cross-site',browserMajor:'142'});
+});
 
 test('网络失败诊断区分阶段且不泄露URL或异常内容', () => {
   assert.equal(safeNetworkFailure('net::ERR_CONNECTION_RESET'), 'net::ERR_CONNECTION_RESET');

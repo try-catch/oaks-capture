@@ -46,11 +46,15 @@ export async function probeBrowserSession(slug: string, rpc: (op: string, data?:
         let code: string | undefined;
         try { code = (await response.json()).status?.code; } catch { /* 拒绝页不输出正文 */ }
         const command = new URL(response.url()).searchParams.get('gsc');
+        const requestHeaders = await response.request().allHeaders();
+        const requestOrigin = requestHeaders.origin ? new URL(requestHeaders.origin).hostname : 'none';
+        const requestReferer = requestHeaders.referer ? new URL(requestHeaders.referer).hostname : 'none';
         const usable = response.ok() && code === 'OK';
         rpc('response', { key, status, usable, retryAfter: headers['retry-after'] ?? '',
           businessCode: code && /^[A-Z_]{1,64}$/.test(code) ? code : status >= 400 ? `HTTP_${status}` : 'INVALID_JSON' });
         console.log(JSON.stringify({ phase: 'browser-probe', slug, command, status,
-          outcome: usable ? 'OK' : 'rejected', edge: /cloudflare/i.test(headers.server ?? '') ? 'cloudflare' : 'other' }));
+          outcome: usable ? 'OK' : 'rejected', requestOrigin, requestReferer,
+          edge: /cloudflare/i.test(headers.server ?? '') ? 'cloudflare' : 'other' }));
         if (!usable) finish(`rejected_${status}`);
         else if (command === 'start') finish('session-ready');
       })().catch(() => finish('response_error'));

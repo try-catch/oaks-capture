@@ -410,7 +410,7 @@ async function main(): Promise<void> {
       const begun = rpc('begin', { githubToken: process.env.OAKS_GITHUB_TOKEN,
         threads: 1, nodes: 1, nodeMs: 3000, throttleLimit: 1,
         maxInFlight: 1, maxClaims: 1, deadlineMinutes: mode === 'compare' ? 5 : 3,
-        ...(mode === 'compare' ? { preferredGames: ['grand'] } : {}) });
+        ...(mode === 'compare' ? { preferredGames: ['egypt_power_x1000'] } : {}) });
       owned = true;
       deadline = begun.deadline;
       const claim = rpc('claim');

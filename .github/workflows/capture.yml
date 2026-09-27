@@ -7,7 +7,7 @@ on:
       mode:
         description: check 验证部署；probe 单节点验证试玩会话；capture 执行真实采集
         type: choice
-        options: [check, capture, probe, single]
+        options: [check, capture, probe, single, compare]
         default: check
   # 定时采集已停止（2026-09-13 交由 Codex 接手）。需要恢复时取消注释即可。
   # schedule:
@@ -99,7 +99,7 @@ jobs:
           fi
   probe:
     needs: prepare
-    if: needs.prepare.result == 'success' && inputs.mode == 'probe' && vars.CAPTURE_ENABLED == 'true'
+    if: needs.prepare.result == 'success' && (inputs.mode == 'probe' || inputs.mode == 'compare') && vars.CAPTURE_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -112,7 +112,7 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: python3 actions/setup-ssh.py
-      - run: node -r ts-node/register actions/worker.ts probe
+      - run: node -r ts-node/register actions/worker.ts ${{ inputs.mode }}
         env:
           OAKS_GITHUB_TOKEN: ${{ github.token }}
   capture:

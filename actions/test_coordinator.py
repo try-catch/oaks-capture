@@ -167,6 +167,28 @@ class RecoveryTests(unittest.TestCase):
         self.assertGreater(reserved['targets']['1'], 0)
         self.assertEqual(self.call('status')['modeQuotas']['one']['targets']['1'], 10000)
 
+    def test_transient_failure_skips_game_after_round_retry_limit(self):
+        atomic(self.root / 'games/registry.json', {'games': [
+            {'slug': 'one', 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}},
+        ]})
+        self.call('end')
+        self.call('begin', maxClaims=2, maxShards=2)
+        self.assertEqual(self.call('claim')['slug'], 'one')
+        for _ in range(2):
+            self.call('done', status='retryable', count=0, reason='play: 官方响应不是 JSON')
+            state = read(self.store.state_path)
+            state['claims']['one']['retryAt'] = 0
+            atomic(self.store.state_path, state)
+        # 连续 2 次临时失败后本轮不再重试，等待其他游戏而不是恢复+失败循环空转。
+        self.assertIn('wait', self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2'}, check_legacy=False))
+        state = read(self.store.state_path)
+        self.assertEqual(state['claims']['one']['retryCount'], 2)
+        atomic(self.store.state_path, state)
+        # 新一轮 begin 重建 claims，重试预算自动恢复。
+        self.call('end')
+        self.call('begin', maxClaims=2, maxShards=2)
+        self.assertEqual(self.call('claim')['slug'], 'one')
+
     def test_unavailable_requires_two_different_nodes(self):
         atomic(self.root / 'games/registry.json', {'games': [
             {'slug': 'one', 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}},

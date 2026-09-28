@@ -103,3 +103,22 @@ test("buy mode discovery 拒绝冲突字段和非法价格", () => {
   assert.throws(() => parseBuyModes({ buy_bonus_price: [0, 100] }), /价格必须大于 0/);
   assert.throws(() => parseBuyModes({ buy_bonus_prices: { 0: 30 } }), /模式编号必须为正整数/);
 });
+
+test("buy mode discovery 支持命名后缀系列与 freespins 单值变体", () => {
+  assert.deepEqual(parseBuyModes({ buy_bonus_price_1: 100, buy_bonus_price_2: 300 }), [
+    { providerMode: 1, spinType: 1, price: 100, source: "suffix" },
+    { providerMode: 2, spinType: 2, price: 300, source: "suffix" },
+  ]);
+  assert.deepEqual(parseBuyModes({ freespins_buying_price: 70 }), [
+    { providerMode: 1, spinType: 1, price: 70, source: "freespin" },
+  ]);
+  assert.throws(
+    () => parseBuyModes({ buy_bonus_price_1: 100, buy_bonus_price_2: 300, freespins_buying_price: 70 }),
+    /购买模式字段冲突/,
+  );
+  assert.throws(
+    () => parseBuyModes({ buy_bonus_price_1: 100, buy_bonus_prices: { 1: 100 } }),
+    /购买模式字段冲突/,
+  );
+  assert.throws(() => parseBuyModes({ buy_bonus_price_1: 0 }), /价格必须大于 0/);
+});

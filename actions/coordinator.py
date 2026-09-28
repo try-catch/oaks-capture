@@ -47,6 +47,9 @@ READ_ONLY_OPS = {'status', 'load', 'load_chunk', 'pending', 'files', 'ack'}
 GAME_LOCAL_OPS = {'load', 'load_chunk', 'pending', 'files', 'ack'}
 RESTORE_CHUNK_BYTES = 512 * 1024
 TRANSIENT_RETRY_MS = 60_000
+# 同一轮内同一游戏的临时失败（如 play 持续非 JSON）最多重试次数：超限后本轮跳过，
+# 避免恢复+重试的循环占满 worker 零产出；新轮 begin 重建 claims 时自然清零。
+MAX_TRANSIENT_RETRIES_PER_ROUND = 2
 
 
 def node_of(worker):
@@ -66,7 +69,8 @@ def claim_slug(key, claim):
 def reclaimable(claim, now):
     status = claim.get('status')
     return status in ('released', 'shard-complete', 'waiting') or (
-        status == 'retryable' and now >= float(claim.get('retryAt', 0)))
+        status == 'retryable' and now >= float(claim.get('retryAt', 0))
+        and int(claim.get('retryCount', 0)) < MAX_TRANSIENT_RETRIES_PER_ROUND)
 
 
 def claim_backoff(state, worker):
@@ -684,6 +688,7 @@ class Store:
             claim['reason'] = str(req.get('reason', ''))[:200]
             if req['status'] == 'retryable':
                 claim['retryAt'] = now + TRANSIENT_RETRY_MS
+                claim['retryCount'] = int(claim.get('retryCount', 0)) + 1
             state['metrics']['documentsWritten'] += int(claim.get('documentsWritten', 0))
             if claim.get('specialOnly'):
                 quota = state.setdefault('modeQuotas', {}).setdefault(slug, {})

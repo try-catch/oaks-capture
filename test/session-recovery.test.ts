@@ -48,6 +48,21 @@ test("官方 200 非 JSON 响应按可恢复会话错误处理", async () => {
   );
 });
 
+test("非 JSON 响应附带脱敏摘要且不回传正文与取值", async () => {
+  await assert.rejects(
+    () => withFetch('<!DOCTYPE html><html>Gateway error token="abc123"', () => command("https://example.test/g", "", "play", {})),
+    (error: unknown) => {
+      if (!(error instanceof ProtocolStatusError) || error.code !== "INVALID_JSON") return false;
+      assert.ok(recoverableRoundError(error));
+      // 仅保留字母数字与空格：错误页类型可判别，标签符号与令牌取值被剥离。
+      assert.match(error.message, /官方响应不是 JSON\(type=[^,]+,bytes=49,prefix=DOCTYPE htmlhtmlGateway error tokenabc123\)/);
+      assert.ok(!error.message.includes("<!DOCTYPE"));
+      assert.ok(!error.message.includes('"abc123"'));
+      return true;
+    },
+  );
+});
+
 test("会话重开与结果未知都只丢弃这一局，普通错误仍然直接抛出", () => {
   assert.equal(recoverableRoundError(new ProtocolStatusError("GAME_REOPENED", "play: reopened")), true);
   assert.equal(recoverableRoundError(new Error('play/spin: {"code":"GAME_REOPENED"}')), true);

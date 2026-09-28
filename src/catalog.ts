@@ -25,7 +25,7 @@ export interface BuyMode {
   providerMode: number;
   spinType: number;
   price: number;
-  source: "map" | "array";
+  source: "map" | "array" | "suffix" | "freespin";
 }
 
 export interface GameCapabilities {

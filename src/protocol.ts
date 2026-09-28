@@ -132,9 +132,15 @@ export async function command(endpoint: string, cookie: string, name: string, ex
       parseRetryAfter(response.headers.get("retry-after")),
     );
   }
+  // 响应体只能读取一次，先取全文再解析；非 JSON 时用同一文本生成脱敏摘要。
+  const text = await response.text();
   let result: JSONMap;
-  try { result = JSON.parse(await response.text()) as JSONMap; }
-  catch { throw new ProtocolStatusError("INVALID_JSON", `${name}: 官方响应不是 JSON`); }
+  try { result = JSON.parse(text) as JSONMap; }
+  catch {
+    // 非 JSON 响应是部分游戏 play 持续失败的主因；只输出白名单脱敏摘要（类型/字节数/字母数字前缀），不回传正文或任何取值。
+    const prefix = text.slice(0, 64).replace(/[^A-Za-z0-9 ]/g, "").slice(0, 48);
+    throw new ProtocolStatusError("INVALID_JSON", `${name}: 官方响应不是 JSON(type=${response.headers.get("content-type") ?? "none"},bytes=${text.length}${prefix ? `,prefix=${prefix}` : ""})`);
+  }
   if (result.status?.code && result.status.code !== "OK") {
     throw new ProtocolStatusError(String(result.status.code), `${name}${extra.action?.name ? `/${extra.action.name}` : ""}: ${JSON.stringify(result.status)}`);
   }

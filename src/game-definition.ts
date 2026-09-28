@@ -65,7 +65,13 @@ export function parseBuyModes(settings: JSONMap): BuyMode[] {
   const array = settings.buy_bonus_price;
   const hasMap = mapped !== undefined && mapped !== null;
   const hasArray = array !== undefined && array !== null;
-  if (hasMap && hasArray) throw new Error("购买模式字段冲突: buy_bonus_prices 与 buy_bonus_price 不能同时出现");
+  // 部分官方客户端会话改用 buy_bonus_price_<N> 命名后缀系列或 freespins_buying_price 单值表达购买入口。
+  const suffixKeys = Object.keys(settings).filter(key => /^buy_bonus_price_[1-9]\d*$/.test(key)).sort();
+  const freespin = settings.freespins_buying_price;
+  const hasSuffix = suffixKeys.length > 0;
+  const hasFreespin = freespin !== undefined && freespin !== null;
+  const present = [hasMap && "buy_bonus_prices", hasArray && "buy_bonus_price", hasSuffix && "buy_bonus_price_<N>", hasFreespin && "freespins_buying_price"].filter(Boolean);
+  if (present.length > 1) throw new Error(`购买模式字段冲突: ${present.join(" 与 ")} 不能同时出现`);
   if (hasMap) {
     if (typeof mapped !== "object" || Array.isArray(mapped)) throw new Error("buy_bonus_prices 必须是对象");
     return assertUniqueBuyModes(Object.entries(mapped as Record<string, unknown>).map(([key, value]) => {
@@ -82,6 +88,15 @@ export function parseBuyModes(settings: JSONMap): BuyMode[] {
       price: validPrice(value, `购买模式 ${providerMode}`),
       source: "array" as const,
     })));
+  }
+  if (hasSuffix) {
+    return assertUniqueBuyModes(suffixKeys.map(key => {
+      const providerMode = Number(key.slice("buy_bonus_price_".length));
+      return { providerMode, spinType: providerMode, price: validPrice(settings[key], `购买模式 ${key}`), source: "suffix" as const };
+    }));
+  }
+  if (hasFreespin) {
+    return assertUniqueBuyModes([{ providerMode: 1, spinType: 1, price: validPrice(freespin, "freespins_buying_price"), source: "freespin" as const }]);
   }
   return [];
 }

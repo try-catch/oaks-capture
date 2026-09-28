@@ -102,9 +102,10 @@ test("旧站批量入口复用正式拓扑和已验收的协议通道", () => {
 
 test("旧站不可用游戏不先传输历史文件", () => {
   const claim = worker.indexOf('slug = claimed.slug;');
-  const launch = worker.indexOf('alternateLaunch = await launchFromWx(game.slug);', claim);
+  const availability = worker.indexOf('await wxLaunchUrl(game.slug);', claim);
   const restore = worker.indexOf("rpc('load', { chunked: true })", claim);
-  assert.ok(claim >= 0 && launch > claim && restore > launch);
+  const launch = worker.indexOf('alternateLaunch = await launchFromWx(game!.slug);', claim);
+  assert.ok(claim >= 0 && availability > claim && restore > availability && launch > restore);
 });
 
 test("官方请求仍受节点间隔、Retry-After 与全局暂停约束", () => {

@@ -252,6 +252,20 @@ function installDurability(): void {
 
 const quotaArgs = ['--target-per-feature', '10', '--normal-rounds', '100000', '--target-per-mode', '10000'];
 
+async function handleWxLaunchFailure(error: unknown): Promise<boolean> {
+  const reason = reasonOf(error);
+  let released = false;
+  try { rpc('done', { status: 'failed', reason }); released = true; }
+  catch { realLog(JSON.stringify({ worker, slug, note: 'WX_LAUNCH_DONE_FAILED' })); }
+  realLog(JSON.stringify({ worker, slug, phase: 'wx-launch-failed', reason }));
+  if (reason === 'WX_SOURCE_UNAVAILABLE' && released && !process.env.OAKS_SINGLE_GAME) {
+    await new Promise(resolve => setTimeout(resolve, numberFromEnv('OAKS_GAME_SWITCH_DELAY_MS', 10_000)));
+    return true;
+  }
+  process.exitCode = 1;
+  return false;
+}
+
 // 单个线程独占一个游戏租约，持续恢复到配额达标或本轮预算耗尽为止。
 async function runThread(): Promise<void> {
   requireGithubHosted();
@@ -302,21 +316,11 @@ async function runThread(): Promise<void> {
     if (process.env.OAKS_SOURCE === 'wx') {
       try {
         if (!game?.discovery) throw new Error('MISSING_DISCOVERY');
-        const { launchFromWx } = await import('../src/wx-launch');
-        alternateLaunch = await launchFromWx(game.slug);
-        game.discovery.playUrl = alternateLaunch.url;
-        realLog(JSON.stringify({ worker, slug, phase: 'wx-launch-ready' }));
+        // 先确认旧站仍提供该游戏；恢复历史可能耗时，不能提前取得会过期的游戏会话令牌。
+        const { wxLaunchUrl } = await import('../src/wx-launch');
+        await wxLaunchUrl(game.slug);
       } catch (error) {
-        const reason = reasonOf(error);
-        let released = false;
-        try { rpc('done', { status: 'failed', reason }); released = true; }
-        catch { realLog(JSON.stringify({ worker, slug, note: 'WX_LAUNCH_DONE_FAILED' })); }
-        realLog(JSON.stringify({ worker, slug, phase: 'wx-launch-failed', reason }));
-        if (reason === 'WX_SOURCE_UNAVAILABLE' && released && !process.env.OAKS_SINGLE_GAME) {
-          await new Promise(resolve => setTimeout(resolve, numberFromEnv('OAKS_GAME_SWITCH_DELAY_MS', 10_000)));
-          continue;
-        }
-        process.exitCode = 1;
+        if (await handleWxLaunchFailure(error)) continue;
         break;
       }
     }
@@ -334,6 +338,17 @@ async function runThread(): Promise<void> {
       realLog(JSON.stringify({ worker, slug, phase: 'restore', status, reason: 'RESTORE_FAILED' }));
       if (status === 'failed') process.exitCode = 1;
       break;
+    }
+    if (process.env.OAKS_SOURCE === 'wx') {
+      try {
+        const { launchFromWx } = await import('../src/wx-launch');
+        alternateLaunch = await launchFromWx(game!.slug);
+        game!.discovery!.playUrl = alternateLaunch.url;
+        realLog(JSON.stringify({ worker, slug, phase: 'wx-launch-ready' }));
+      } catch (error) {
+        if (await handleWxLaunchFailure(error)) continue;
+        break;
+      }
     }
     pending = undefined;
     requestKey = undefined;

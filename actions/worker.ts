@@ -288,6 +288,7 @@ async function runThread(): Promise<void> {
       continue;
     }
     slug = claimed.slug;
+    alternateLaunch = undefined;
     // 单节点验收只允许指定游戏；认领不匹配时不发官网请求，也不切换游戏。
     if (process.env.OAKS_SINGLE_GAME && slug !== process.env.OAKS_SINGLE_GAME) {
       rpc('done', { status: 'paused', reason: 'SINGLE_GAME_MISMATCH' });
@@ -298,21 +299,6 @@ async function runThread(): Promise<void> {
     shardIndex = Number(claimed.shardIndex ?? 0);
     const directory = path.join(root, 'output', slug);
     const game = registry.games.find(game => game.slug === slug);
-    try {
-      if (!game) throw new Error('REGISTRY_MISMATCH');
-      const restored = rpc('load', { chunked: true });
-      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-      restoreData(path.join(directory, `${slug}.ndjson`), restored.dataBytes,
-        (offset, size) => rpc('load_chunk', { offset, size }), stopped);
-      for (const [name, value] of Object.entries(restored.files)) fs.writeFileSync(path.join(directory, name), String(value), { mode: 0o600 });
-    } catch {
-      // 准备阶段没有发官方请求或新数据；不要写回半份覆盖率，也不遗留 running 租约。
-      const status = stopped() ? 'paused' : 'failed';
-      try { rpc('done', { status, reason: 'RESTORE_FAILED' }); } catch { /* 通道不可用时由 end 收口。 */ }
-      realLog(JSON.stringify({ worker, slug, phase: 'restore', status, reason: 'RESTORE_FAILED' }));
-      if (status === 'failed') process.exitCode = 1;
-      break;
-    }
     if (process.env.OAKS_SOURCE === 'wx') {
       try {
         if (!game?.discovery) throw new Error('MISSING_DISCOVERY');
@@ -333,6 +319,21 @@ async function runThread(): Promise<void> {
         process.exitCode = 1;
         break;
       }
+    }
+    try {
+      if (!game) throw new Error('REGISTRY_MISMATCH');
+      const restored = rpc('load', { chunked: true });
+      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+      restoreData(path.join(directory, `${slug}.ndjson`), restored.dataBytes,
+        (offset, size) => rpc('load_chunk', { offset, size }), stopped);
+      for (const [name, value] of Object.entries(restored.files)) fs.writeFileSync(path.join(directory, name), String(value), { mode: 0o600 });
+    } catch {
+      // 准备阶段没有新数据；不要写回半份覆盖率，也不遗留 running 租约。
+      const status = stopped() ? 'paused' : 'failed';
+      try { rpc('done', { status, reason: 'RESTORE_FAILED' }); } catch { /* 通道不可用时由 end 收口。 */ }
+      realLog(JSON.stringify({ worker, slug, phase: 'restore', status, reason: 'RESTORE_FAILED' }));
+      if (status === 'failed') process.exitCode = 1;
+      break;
     }
     pending = undefined;
     requestKey = undefined;

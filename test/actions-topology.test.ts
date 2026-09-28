@@ -100,6 +100,13 @@ test("旧站批量入口复用正式拓扑和已验收的协议通道", () => {
   assert.match(worker, /if \(process.env.OAKS_SOURCE === 'wx' && process.env.OAKS_SINGLE_GAME\)/);
 });
 
+test("旧站不可用游戏不先传输历史文件", () => {
+  const claim = worker.indexOf('slug = claimed.slug;');
+  const launch = worker.indexOf('alternateLaunch = await launchFromWx(game.slug);', claim);
+  const restore = worker.indexOf("rpc('load', { chunked: true })", claim);
+  assert.ok(claim >= 0 && launch > claim && restore > launch);
+});
+
 test("官方请求仍受节点间隔、Retry-After 与全局暂停约束", () => {
   assert.match(coordinator, /DEFAULT_NODE_SPACING_MS = 250/);
   assert.match(coordinator, /GLOBAL_LIMIT_NODES = 2/);

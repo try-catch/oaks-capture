@@ -223,6 +223,33 @@ class RecoveryTests(unittest.TestCase):
         self.call('done', status='incomplete', count=1)
         self.assertEqual(self.call('status')['metrics']['documentsWritten'], 1)
 
+    def test_second_shard_duplicate_round_is_rejected_once_and_quota_not_double_counted(self):
+        """双分片安全前提：两个分片采到同一局时只有首个分片入库，配额只计一次。"""
+        atomic(self.root / 'games/registry.json', {'games': [
+            {'slug': 'one', 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}}
+        ]})
+        self.call('end')
+        self.call('begin', nodes=2, maxClaims=2, maxShards=2)
+        self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.0'}, check_legacy=False)
+        self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2.0'}, check_legacy=False)
+        targets = {'0': 100000, '1': 10000}
+        first_reservation = self.store.call({'op': 'reserve_modes', 'run': '100-1', 'worker': '1.0', 'slug': 'one',
+                                             'counts': {'0': 0, '1': 0}, 'targets': targets}, check_legacy=False)
+        second_reservation = self.store.call({'op': 'reserve_modes', 'run': '100-1', 'worker': '2.0', 'slug': 'one',
+                                              'counts': {'0': 0, '1': 0}, 'targets': targets}, check_legacy=False)
+        # 双分片把剩余配额均分，预订之和恰好等于缺口，不重复计量。
+        self.assertEqual(sum(res['targets']['1'] for res in (first_reservation, second_reservation)), 10000)
+        document = {'game': 'one', 'buy': 1, 'sourceRoundHash': 'b' * 64, 'data': [1]}
+        line = json.dumps(document, separators=(',', ':'))
+        first = self.store.call({'op': 'append_batch', 'run': '100-1', 'worker': '1.0', 'slug': 'one',
+                                 'lines': [line]}, check_legacy=False)
+        second = self.store.call({'op': 'append_batch', 'run': '100-1', 'worker': '2.0', 'slug': 'one',
+                                  'lines': [line]}, check_legacy=False)
+        self.assertEqual((first['written'], first['duplicates']), (1, 0))
+        self.assertEqual((second['written'], second['duplicates']), (0, 1))
+        self.assertEqual((self.root / 'output/one/one.ndjson').read_text().count('\n'), 1)
+        self.assertEqual(self.call('status')['modeQuotas']['one']['counts']['1'], 1)
+
     def test_runner_batches_documents_without_duplicate_payload(self):
         documents = [
             {'game': 'one', 'sourceRoundHash': format(number, '064x'), 'data': [number]}

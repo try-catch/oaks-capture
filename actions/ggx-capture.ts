@@ -44,13 +44,14 @@ function reasonOf(error: unknown): string {
 }
 
 // 游戏:模式条目的模式必须是 registry 声明的购买模式，避免把会话缺失的模式当目标。
+// registry 的 settings.buyModes 常缺失，此时从 buyBonusPrices 键取模式号（同 oaks.ts 口径）。
 function declaredModes(game: RegistryGame): number[] {
   const settings = game.discovery?.settings as Record<string, unknown> | undefined;
-  const buyModes = (settings?.buyModes as Array<{ spinType?: number }> | undefined) ?? [];
-  const fromPrices = Object.keys((settings?.buyBonusPrices as Record<string, unknown> | undefined) ?? {}).map(Number);
-  return (buyModes.map((mode) => mode.spinType) ?? fromPrices)
-    .filter((mode) => Number.isInteger(mode) && Number(mode) > 0)
-    .map(Number);
+  const buyModes = settings?.buyModes as Array<{ spinType?: number }> | undefined;
+  const spinTypes = Array.isArray(buyModes) && buyModes.length
+    ? buyModes.map((mode) => Number(mode.spinType))
+    : Object.keys((settings?.buyBonusPrices as Record<string, unknown> | undefined) ?? {}).map(Number);
+  return spinTypes.filter((mode) => Number.isInteger(mode) && Number(mode) > 0);
 }
 
 async function main(): Promise<void> {

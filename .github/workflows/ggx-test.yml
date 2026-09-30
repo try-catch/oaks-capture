@@ -22,7 +22,12 @@ permissions:
 
 # 与生产采集完全隔离：不调用协调器（不 begin/claim/permit），单 runner 单线程串行；
 # 数据写入隔离库 oaks_ggx_test，验证兼容前不触碰任何生产数据。
+# Mongo 复用生产 SSH 隧道口径（setup-ssh 后 127.0.0.1:27018），只写隔离库。
 env:
+  OAKS_SSH_KEY: ${{ secrets.OAKS_SSH_KEY }}
+  OAKS_KNOWN_HOSTS: ${{ secrets.OAKS_KNOWN_HOSTS }}
+  OAKS_SSH_HOST: ${{ secrets.OAKS_SSH_HOST }}
+  OAKS_MONGO_HOST: ${{ secrets.OAKS_MONGO_HOST }}
   OAKS_MONGO_URI: ${{ secrets.OAKS_MONGO_URI }}
   OAKS_PROVIDER_AUTHORIZED: ${{ secrets.OAKS_PROVIDER_AUTHORIZED }}
   OAKS_SOURCE: ggx
@@ -48,6 +53,7 @@ jobs:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run check
+      - run: python3 actions/setup-ssh.py
       - name: Confirm GitHub-hosted Linux execution
         run: |
           test "$RUNNER_ENVIRONMENT" = github-hosted

@@ -96,6 +96,9 @@ export function parseBuyModes(settings: JSONMap): BuyMode[] {
     }));
   }
   if (hasFreespin) {
+    // ggx 源部分会话把 freespins_buying_price 报为 0（该会话没有有效购买入口）；
+    // 视为无购买模式，交由上层“会话未提供代码声明的全部模式”保护跳过该游戏，不抛错。
+    if (process.env.OAKS_SOURCE === "ggx" && !(Number(freespin) > 0)) return [];
     return assertUniqueBuyModes([{ providerMode: 1, spinType: 1, price: validPrice(freespin, "freespins_buying_price"), source: "freespin" as const }]);
   }
   return [];

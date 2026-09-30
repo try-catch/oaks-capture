@@ -1,0 +1,56 @@
+name: 3 OAKS goldengatex 对照测试
+run-name: 3 OAKS ggx 对照 ${{ inputs.spec }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      spec:
+        description: '游戏:模式 列表（逗号分隔，模式须为 registry 声明的购买模式）'
+        type: string
+        default: 'china_festival:1,3_hot_chillies:1,coin_volcano:1'
+      rounds:
+        description: '每游戏局数预算'
+        type: string
+        default: '25'
+      minutes:
+        description: '总时长预算（分钟）'
+        type: string
+        default: '35'
+
+permissions:
+  contents: read
+
+# 与生产采集完全隔离：不调用协调器（不 begin/claim/permit），单 runner 单线程串行；
+# 数据写入隔离库 oaks_ggx_test，验证兼容前不触碰任何生产数据。
+env:
+  OAKS_MONGO_URI: ${{ secrets.OAKS_MONGO_URI }}
+  OAKS_PROVIDER_AUTHORIZED: ${{ secrets.OAKS_PROVIDER_AUTHORIZED }}
+  OAKS_SOURCE: ggx
+  OAKS_MONGO_DB: oaks_ggx_test
+  OAKS_GGX_SPEC: ${{ inputs.spec }}
+  OAKS_GGX_ROUNDS: ${{ inputs.rounds }}
+  OAKS_GGX_MINUTES: ${{ inputs.minutes }}
+  OAKS_SPIN_DELAY_MS: '2000'
+  OAKS_REQUEST_TIMEOUT_MS: '20000'
+
+jobs:
+  ggx-test:
+    # CAPTURE_ENABLED 与生产采集共用同一总开关。
+    if: github.repository == 'try-catch/oaks-capture' && github.ref == 'refs/heads/main' && vars.CAPTURE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run check
+      - name: Confirm GitHub-hosted Linux execution
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = Linux
+          echo "GitHub run $GITHUB_RUN_ID / $RUNNER_ENVIRONMENT / $RUNNER_OS / $RUNNER_ARCH"
+      - run: node -r ts-node/register actions/ggx-capture.ts

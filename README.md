@@ -35,3 +35,18 @@ Secrets：`OAKS_SSH_KEY`、`OAKS_KNOWN_HOSTS`、`OAKS_SSH_HOST`、`OAKS_MONGO_HO
 如果 workflow 被强制取消而 finish 未能释放锁，下次 begin 使用当前 job 的只读 GitHub Token 查询旧 run/attempt；只有 GitHub 确认旧 attempt 已 completed 才回收队列所有权。Token 只通过 SSH 标准输入传递，不落盘。未知请求日志仍会阻止该请求自动重放，需要人工核实。禁止按计时器抢占未确认的请求或队列锁。
 
 验证：`npm run check`、`npm test`、`python3 -m unittest discover -s actions -p 'test_*.py'`。这些测试使用合成协议与临时目录，不发真实采集请求。
+
+## goldengatex 对照测试源（ggx，2026-09-30 接入）
+
+`ggx-test.yml` 是与生产采集完全隔离的手动对照测试：不调用协调器（不 begin/claim/permit），
+单 runner 单线程串行，数据写入隔离库 `oaks_ggx_test`，文档 `source` 字段固定为 goldengatex
+试玩页地址；验证兼容并确认吞吐收益后才决定是否并入生产采集。上游为用户确认的纯测试环境
+（试玩余额，新令牌重新登录即刷新），全部令牌共享一个全局演示会话，因此禁止并发。
+
+启动链路（实机核实，见 `src/ggx-launch.ts`）：试玩页 `/mobile/index/play/id/<id>.html` 每次铸造
+一次性令牌 → 页面内嵌 `game_start.do?gameCode=<官方slug>&token=…` → 其 launcher 配置的
+`desktop.server_url` 即 gsc 协议端点（`/gs/<gameCode>/desktop/<令牌>/prod/`，可直接 fetch）。
+协议与官方 demo 完全一致（login/start/play）；差异点只有两处：购买动作需 `bet_per_line=1`
+携带会话 `bet_factor`（站内注额阶梯起点高，按阶梯购买会 BET_EXCEED），余额耗尽
+（`BET_EXCEED`）按可恢复错误重新登录。slug→试玩页 ID 映射固化在 `games/ggx-catalog.json`，
+只收录与 registry slug 完全一致的条目；新增游戏需先逐一核实 gameCode 再入目录。

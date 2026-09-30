@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { REQUEST_TIMEOUT_MS } from "../config";
 import { GameDiscovery } from "./catalog";
 import { DEMO_REQUEST_HEADERS, discoverGame, parsePlayConfig, resolveDemoEndpoint } from "./game-definition";
+import { GGX_LAUNCH_HOST, extractGgxLaunchUrl, ggxSlugFromPlayPageUrl, parseGgxLaunch } from "./ggx-launch";
 import type { PlayAction } from "./shop";
 
 export type JSONMap = Record<string, any>;
@@ -78,24 +79,47 @@ export { parsePlayConfig } from "./game-definition";
 
 export async function openSession(game?: GameDiscovery): Promise<Session> {
   const definition = game ?? await discoverGame("sun_of_egypt");
-  let page: Awaited<ReturnType<typeof fetchText>>;
-  try { page = await fetchText(definition.playUrl); }
-  catch (error) {
-    if (error instanceof ProtocolHttpError) {
-      throw new ProtocolHttpError(`PLAY_PAGE_HTTP_${error.status}`, error.status, error.retryAfterMs);
+  const ggx = process.env.OAKS_SOURCE === "ggx";
+  // ggx 源的 definition.playUrl 指向 goldengatex 试玩页：每次登录重新铸造令牌，
+  // 测试余额随新令牌刷新，因此重新登录必须完整重走试玩页 → game_start.do 两跳。
+  const fetchPlayPage = async (url: string): Promise<Awaited<ReturnType<typeof fetchText>>> => {
+    try { return await fetchText(url); }
+    catch (error) {
+      if (error instanceof ProtocolHttpError) {
+        throw new ProtocolHttpError(`PLAY_PAGE_HTTP_${error.status}`, error.status, error.retryAfterMs);
+      }
+      throw error;
     }
-    throw error;
+  };
+  let page: Awaited<ReturnType<typeof fetchText>>;
+  let ggxEndpoint: { endpoint: string; token: string } | undefined;
+  if (ggx) {
+    const slug = ggxSlugFromPlayPageUrl(definition.playUrl);
+    const launchUrl = extractGgxLaunchUrl((await fetchPlayPage(definition.playUrl)).text, slug);
+    page = await fetchPlayPage(launchUrl);
+    ggxEndpoint = parseGgxLaunch(page.text, launchUrl);
+  } else {
+    page = await fetchPlayPage(definition.playUrl);
   }
-  const config = parsePlayConfig(page.text);
-  const queue = String(config.options.queue);
-  const wx = process.env.OAKS_SOURCE === "wx";
-  const launch = new URL(definition.playUrl);
-  if (wx && launch.hostname !== "3oaks.ssgfivegame.com") throw new Error("旧站启动地址异常");
-  const token = String((wx && launch.searchParams.get("token")) || config.options.token);
-  const api = new URL(resolveDemoEndpoint(String(config.desktop?.server_url ?? definition.serverTemplate), queue));
-  if (wx) {
-    if (api.hostname !== "betman-demo.head.3oaks.com") throw new Error("旧站协议地址异常");
-    api.hostname = "3oaks-api.ssgfivegame.com";
+  let config: ReturnType<typeof parsePlayConfig> | undefined;
+  let queue = "";
+  let token: string;
+  let api: URL;
+  if (ggxEndpoint) {
+    token = ggxEndpoint.token;
+    api = new URL(ggxEndpoint.endpoint);
+  } else {
+    config = parsePlayConfig(page.text);
+    queue = String(config.options.queue);
+    const wx = process.env.OAKS_SOURCE === "wx";
+    const launch = new URL(definition.playUrl);
+    if (wx && launch.hostname !== "3oaks.ssgfivegame.com") throw new Error("旧站启动地址异常");
+    token = String((wx && launch.searchParams.get("token")) || config.options.token);
+    api = new URL(resolveDemoEndpoint(String(config.desktop?.server_url ?? definition.serverTemplate), queue));
+    if (wx) {
+      if (api.hostname !== "betman-demo.head.3oaks.com") throw new Error("旧站协议地址异常");
+      api.hostname = "3oaks-api.ssgfivegame.com";
+    }
   }
   const endpoint = api.href;
   // 官网 Runner 跨域 XHR 未启用 withCredentials；试玩只使用启动令牌。
@@ -111,17 +135,22 @@ export async function openSession(game?: GameDiscovery): Promise<Session> {
 }
 
 export async function command(endpoint: string, cookie: string, name: string, extra: JSONMap): Promise<JSONMap> {
+  const ggx = process.env.OAKS_SOURCE === "ggx";
+  const wx = process.env.OAKS_SOURCE === "wx";
   // 与官方 Runner 保持一致，首帧和奖励续帧均携带相同的金额口径及运行参数。
-  const playOptions = name === "play" ? {
+  // ggx 源按实测客户端请求镜像：quick_spin 为数字、携带 sound，不带 fullscreen。
+  const playOptions = name === "play" ? (ggx ? {
+    set_denominator: 1, quick_spin: 0, sound: true, autogame: false,
+    mobile: "0", portrait: false,
+  } : {
     set_denominator: 1, quick_spin: false, sound: false, autogame: false,
     mobile: "0", portrait: false, fullscreen: false,
-  } : {};
-  const wx = process.env.OAKS_SOURCE === "wx";
+  }) : {};
   const body = JSON.stringify({ command: name, request_id: crypto.randomUUID().replaceAll("-", ""), ...playOptions, ...extra,
-    ...(wx ? {} : { client_command_timestamp: Date.now() }) });
+    ...(wx || ggx ? {} : { client_command_timestamp: Date.now() }) });
   const response = await fetch(`${endpoint}?gsc=${encodeURIComponent(name)}`, {
     method: "POST",
-    headers: { ...(wx ? { "content-type": "text/plain" } : DEMO_REQUEST_HEADERS), ...(cookie ? { cookie } : {}) },
+    headers: { ...(ggx ? { "content-type": "text/plain", origin: `https://${GGX_LAUNCH_HOST}` } : wx ? { "content-type": "text/plain" } : DEMO_REQUEST_HEADERS), ...(cookie ? { cookie } : {}) },
     body,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });

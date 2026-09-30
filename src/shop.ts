@@ -45,6 +45,17 @@ export function discoverShop(start: JSONMap): ShopInventory {
   };
 }
 
+// ggx 源实测（2026-09-30）：站内注额阶梯起点远高于官方 demo（如 china_festival 50 vs 1），
+// 按阶梯最低注购买会超出试玩余额（BET_EXCEED）；而 bet_per_line=1 携带会话声明的
+// bet_factor 与 wx 生产参数一致，服务端接受且成本落在余额内。普通 spin 仍必须用阶梯值。
+export function applyGgxSpinParams(actions: PlayAction[], betFactor: unknown): PlayAction[] {
+  const factorValue = Array.isArray(betFactor) ? Number(betFactor[0]) : Number(betFactor);
+  const factor = Number.isFinite(factorValue) && factorValue > 0 ? factorValue : 20;
+  return actions.map((action) => action.name === "buy_spin"
+    ? { ...action, params: { ...action.params, bet_per_line: 1, bet_factor: factor } }
+    : action);
+}
+
 export function buildPlayableActions(start: JSONMap, shop: ShopInventory, clientFamily?: string, omitBuyFactor = new Set<number>(), stringBuyMode = new Set<number>()): PlayAction[] {
   const context = start.context ?? {};
   const state = context.current ? context[context.current] ?? {} : {};

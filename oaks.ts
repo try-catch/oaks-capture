@@ -15,7 +15,7 @@ import { classifyRound, discoverFeatureInventory, FeatureInventory, includeObser
 import { discoverGame } from "./src/game-definition";
 import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, upsertMongoRound, upsertMongoRounds } from "./src/mongo-store";
 import { actionFeatureKey, actionSpinType, command, JSONMap, nextAction, openSession, protocolAction, ProtocolHttpError, ProtocolStatusError, roundBet, roundSpinType, Session } from "./src/protocol";
-import { buildPlayableActions, discoverShop, PlayAction, ShopInventory } from "./src/shop";
+import { buildPlayableActions, discoverShop, applyGgxSpinParams, PlayAction, ShopInventory } from "./src/shop";
 import { validateGameRound } from "./src/validators";
 
 const args = process.argv.slice(2);
@@ -49,7 +49,8 @@ export function selectedModeTypes(expected: number[], requested: number[]): numb
 }
 
 // 官方会话被重开后，当前这一局已经无法完成，但游戏本身可以继续。
-const RECOVERABLE_ROUND_CODES = ["GAME_REOPENED", "GAME_CLOSED", "SESSION_EXPIRED", "SESSION_NOT_FOUND", "SERVER_ERROR", "FUNDS_EXCEED", "INVALID_JSON"];
+// BET_EXCEED 是 ggx 试玩余额耗尽：重新登录铸造新令牌即恢复固定试玩余额。
+const RECOVERABLE_ROUND_CODES = ["GAME_REOPENED", "GAME_CLOSED", "SESSION_EXPIRED", "SESSION_NOT_FOUND", "SERVER_ERROR", "FUNDS_EXCEED", "BET_EXCEED", "INVALID_JSON"];
 
 // “这一局不能再用了”的原因：官方业务失败（含会话重开），
 // 或协调器判定上一轮结果未知而拒绝重放。两种情况都只需丢弃未完成帧并重新登录。
@@ -279,6 +280,8 @@ export async function captureGame(
 ): Promise<void> {
   if (captureRuntime && !game.discovery) throw new Error("Actions 采集缺少已核实的官方能力定义");
   const definition = game.discovery ?? await discoverGame(game.slug);
+  // ggx 对照测试由 ggx-capture 注入试玩页地址：openSession 每次登录重走该页铸造新令牌。
+  if (process.env.OAKS_SOURCE === "ggx" && process.env.OAKS_GGX_PLAY_URL) definition.playUrl = process.env.OAKS_GGX_PLAY_URL;
   const outputDir = path.resolve(__dirname, "output", game.slug);
   await fs.mkdir(outputDir, { recursive: true });
   const outputName = stringOption(args, "--output", `${game.slug}.ndjson`);
@@ -379,6 +382,9 @@ export async function captureGame(
   let modeTargets: Record<number, number> = {};
 
   let quotaActions = buildPlayableActions(session.start, discoverShop(session.start), definition.clientFamily);
+  if (process.env.OAKS_SOURCE === "ggx") {
+    quotaActions = applyGgxSpinParams(quotaActions, definition.settings?.betFactor);
+  }
   if (modeQuota) {
     const declared = definition.settings;
     const buys = declared.buyModes?.map(mode => mode.spinType) ?? Object.keys(declared.buyBonusPrices ?? {}).map(Number);
@@ -394,7 +400,9 @@ export async function captureGame(
     if (captureRuntime?.shouldStop()) throw new Error("ACTIONS_BUDGET");
     try {
       const shop = discoverShop(session.start);
-      const actions = buildPlayableActions(session.start, shop, definition.clientFamily, omitBuyFactor, stringBuyMode);
+      const built = buildPlayableActions(session.start, shop, definition.clientFamily, omitBuyFactor, stringBuyMode);
+      // ggx 源购买动作需要实测参数（bet_per_line=1 + bet_factor），普通 spin 保持阶梯注。
+      const actions = process.env.OAKS_SOURCE === "ggx" ? applyGgxSpinParams(built, definition.settings?.betFactor) : built;
       if (!actions.length) throw new Error("start 没有可执行动作");
       const needed = modeQuota ? remainingModes()[0] : undefined;
       const action = captureRuntime?.pending()?.action ?? (modeQuota

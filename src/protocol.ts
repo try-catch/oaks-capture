@@ -203,7 +203,12 @@ export function roundBet(frames: JSONMap[]): number {
     const number = Number(value);
     if (Number.isFinite(number) && number > 0) return number;
   }
-  throw new Error("结果缺少首帧 round_bet，无法确定真实采集下注");
+  // 只记录状态名称及金额字段，供定位首帧结构；不输出响应正文或会话凭据。
+  const stateName = (value: unknown) => typeof value === "string" && /^[a-z_]{1,40}$/.test(value) ? value : "unknown";
+  const bets = Object.fromEntries(Object.entries(first)
+    .filter(([name, state]) => stateName(name) !== "unknown" && state && typeof state === "object" && Number.isFinite(Number((state as JSONMap).round_bet)))
+    .map(([name, state]) => [name, Number((state as JSONMap).round_bet)]));
+  throw new Error(`结果缺少首帧 round_bet，无法确定真实采集下注: ${JSON.stringify({current: stateName(first.current), action: stateName(first.last_action), bets})}`);
 }
 
 export function frameCumulativeWin(frame: JSONMap): number {

@@ -87,3 +87,13 @@ test("Hold & Win 按锁定 Sun 加 Mini/Major/Grand 规则校验", () => {
   (frames[1].context.bonus as Record<string, unknown>).round_win = 30199;
   assert.throws(() => validateRound(frames, 25), /Hold & Win 派奖不符/);
 });
+
+
+test("首帧下注缺失时记录脱敏结构，仍拒绝猜测或用其他状态下注代替", async () => {
+  const { roundBet } = await import("../src/protocol");
+  assert.throws(() => roundBet([{context: {current: "bonus", last_action: "buy_spin", spins: {round_bet: 20}, session_id: "private-secret"}}]), error => {
+    assert.match((error as Error).message, /"current":"bonus".*"action":"buy_spin".*"spins":20/);
+    assert.doesNotMatch((error as Error).message, /private-secret|session_id/);
+    return true;
+  });
+});

@@ -164,3 +164,21 @@ test("上游缺少游戏数据表时隔离本游戏，不重复重登也不泄�
     },
   );
 });
+
+
+test("SQL1064诊断只保留合法动作金额和模式类型，不泄露SQL或凭据", async () => {
+  await assert.rejects(
+    () => withFetch("Error 1064 (42000): private_sql secret_response", () => command("https://example.test/g", "", "play", {
+      session_id: "secret_session", action: { name: "buy_spin", params: { bet_per_line: 1, lines: 25, selected_mode: "2", token: "secret_token", bet_factor: "secret_factor" } },
+    })),
+    (error: unknown) => {
+      if (!(error instanceof ProtocolStatusError)) return false;
+      assert.equal(error.code, "INVALID_JSON");
+      assert.equal(recoverableRoundError(error), true);
+      assert.match(error.message, /"action":"buy_spin"/);
+      assert.match(error.message, /"selected_mode":\{"value":2,"type":"string"\}/);
+      assert.doesNotMatch(error.message, /secret|private_sql|session_id|token|bet_factor/);
+      return true;
+    },
+  );
+});

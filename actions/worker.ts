@@ -350,7 +350,9 @@ async function runThread(): Promise<void> {
       const restoreStarted = Date.now();
       await restoreHistory(path.join(directory, `${slug}.ndjson`), restored.dataBytes);
       realLog(JSON.stringify({worker, slug, phase: 'restore-complete', bytes: restored.dataBytes, seconds: Math.round((Date.now() - restoreStarted) / 1000)}));
+      const filesStarted = Date.now();
       for (const [name, value] of Object.entries(restored.files)) fs.writeFileSync(path.join(directory, name), String(value), { mode: 0o600 });
+      realLog(JSON.stringify({ worker, slug, phase: 'restore-files-complete', elapsedMs: Date.now() - filesStarted }));
     } catch {
       // 准备阶段没有新数据；不要写回半份覆盖率，也不遗留 running 租约。
       const status = stopped() ? 'paused' : 'failed';

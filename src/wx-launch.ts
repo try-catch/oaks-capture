@@ -40,9 +40,14 @@ export async function wxLaunchUrl(slug: string): Promise<string> {
 
 // 浏览器只加载最终游戏页，不再为每个进程重开站点首页和目录。
 export async function launchFromWx(slug: string): Promise<{ url: string; html: string }> {
+  const started = Date.now();
   const url = await wxLaunchUrl(slug);
+  const linkMs = Date.now() - started;
+  const browserStarted = Date.now();
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  const browserMs = Date.now() - browserStarted;
   try {
+    const pageStarted = Date.now();
     const page = await browser.newPage();
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     if (!response) throw new Error('WX_LAUNCH_EMPTY');
@@ -50,6 +55,8 @@ export async function launchFromWx(slug: string): Promise<{ url: string; html: s
     const html = await response.text();
     const config = parsePlayConfig(html);
     if (!config.options?.token || !config.options?.queue) throw new Error('WX_LAUNCH_INVALID');
+    console.error(JSON.stringify({ phase: 'wx-launch-timing', slug, linkMs, browserMs,
+      pageMs: Date.now() - pageStarted, totalMs: Date.now() - started }));
     return { url, html };
   } finally { await browser.close(); }
 }

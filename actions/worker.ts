@@ -9,6 +9,7 @@ import { restoreData } from '../src/restore-data';
 import { countNdjsonLines } from '../src/ndjson-lines';
 import { browserFetch, closeBrowserTransport, fetchFailureDiagnostic } from '../src/browser-transport';
 import { ProtocolHttpError } from '../src/protocol';
+import { captureThreadCount } from '../config';
 
 const root = path.resolve(__dirname, '..');
 const run = `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
@@ -86,7 +87,7 @@ function numberFromEnv(name: string, fallback: number): number {
 }
 function activeThreads(): number {
   // 进程池大小与活跃会话预算分离；空闲进程由协调器退避等待。
-  return Math.min(4, Math.floor(numberFromEnv('OAKS_THREADS', 4)));
+  return captureThreadCount(numberFromEnv('OAKS_THREADS', 4), numberFromEnv('OAKS_NODES', 1), numberFromEnv('OAKS_MAX_CLAIMS', 24));
 }
 async function discoverEgress(): Promise<string> {
   let lastError: unknown;
@@ -150,7 +151,7 @@ function installDurability(): void {
       documentBatch.push(JSON.stringify(document));
       timing.documents += 1;
       if (documentBatch.length >= 25) flushDocuments();
-      if (timing.documents % 25 === 0) {
+      if (process.env.OAKS_SINGLE_GAME || timing.documents % 25 === 0) {
         const n = timing.documents;
         realLog(JSON.stringify({
           worker, phase: 'timing', docs: n,
@@ -276,13 +277,14 @@ async function runThread(): Promise<void> {
   process.env.OAKS_TEST_MONGO_URI = process.env.OAKS_MONGO_URI;
   // 单次调用不再限制新增局数：由配额达标或本轮 deadline 决定何时收工。
   process.argv = [process.execPath, __filename, '--rounds', '1000000', ...quotaArgs];
+  if (process.env.OAKS_SOURCE === 'wx' && process.env.OAKS_SINGLE_GAME) {
+    process.argv = [process.execPath, __filename, '--rounds', '1', '--normal-rounds', '0', '--target-per-mode', '10000', '--mode-types', '2'];
+  }
   const { readRegistry } = await import('../catalog-sync');
   const { captureGame, gameRegistrationUnavailable, recoverableRoundError } = await import('../oaks');
   const registry = await readRegistry();
   installDurability();
-  if (process.env.OAKS_SOURCE === 'wx' && process.env.OAKS_SINGLE_GAME) {
-    process.argv = [process.execPath, __filename, '--rounds', '1', '--normal-rounds', '0', '--target-per-mode', '10000', '--mode-types', '2'];
-  }
+
   deadline = Date.now() + numberFromEnv('OAKS_DEADLINE_MINUTES', 40) * 60_000;
   while (!stopped()) {
     let claimed: any;
@@ -360,7 +362,7 @@ async function runThread(): Promise<void> {
     const originalWarn = console.warn;
     console.log = console.warn = () => {};
     try {
-      await captureGame(game!, undefined, { partialModeQuota: specialOnly, skipMongoSync: shardIndex > 1 });
+      await captureGame(game!, undefined, { partialModeQuota: specialOnly, skipMongoSync: shardIndex > 1, flushEveryRound: !!process.env.OAKS_SINGLE_GAME });
       console.log = originalLog;
       console.warn = originalWarn;
       if (specialOnly) {

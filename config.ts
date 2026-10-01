@@ -30,3 +30,8 @@ export const LANGUAGE_MAP: Record<string, string> = {
   "pt-BR": "pt-br", "ro-RO": "ro", "ru-RU": "ru", "sv-SE": "sv", "th-TH": "th",
   "tr-TR": "tr", "vi-VN": "vi", "zh-CN": "zh",
 };
+
+// 根据全局会话预算收敛每节点进程数，避免空闲进程挤占协调通道。
+export function captureThreadCount(threads: number, nodes: number, claims: number): number {
+  return Math.max(1, Math.min(4, Math.floor(threads), Math.ceil(claims / nodes)));
+}

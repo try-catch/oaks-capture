@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { captureThreadCount } from "../config";
 
 const root = path.resolve(__dirname, "..");
 // 内部仓库把 workflow 放在 actions/workflow.yml，公开仓库放在 .github/workflows/capture.yml。
@@ -20,14 +21,17 @@ function envValue(name: string): string {
   return match![1].trim();
 }
 
-test("20 个节点各启动四个 worker，但活跃会话预算保持独立", () => {
+test("20 个节点按全局预算各启动两个 worker，减少空闲协调通道", () => {
   const nodes = Number(envValue("OAKS_NODES").replace(/['"]/g, ""));
   const maxClaims = Number(envValue("OAKS_MAX_CLAIMS").replace(/['"]/g, ""));
   const authorizedThreads = Number(envValue("OAKS_THREADS").replace(/['"]/g, ""));
   assert.equal(nodes, 20);
   assert.equal(maxClaims, 24);
   assert.equal(authorizedThreads, 4);
-  assert.match(worker, /Math\.min\(4, Math\.floor\(numberFromEnv\('OAKS_THREADS', 4\)\)\)/);
+  assert.equal(captureThreadCount(authorizedThreads, nodes, maxClaims), 2);
+  assert.equal(captureThreadCount(1, 1, 1), 1);
+  assert.equal(captureThreadCount(4, 1, 24), 4);
+  assert.match(worker, /return captureThreadCount\(/);
   assert.doesNotMatch(worker, /const threads = numberFromEnv\('OAKS_THREADS', 8\)/);
   // 两条启动路径都必须走收敛后的线程数：supervise 产子进程、begin 上报预算。
   assert.ok((worker.match(/activeThreads\(\)/g) ?? []).length >= 3, "activeThreads 未覆盖全部启动路径");
@@ -59,4 +63,12 @@ test("退避状态对门禁可观测且每轮重置", () => {
   assert.match(coordinator, /'claimBackoff': \{'workers'/);
   assert.match(coordinator, /metrics=metrics, claimWaits=\{\}/);
   assert.match(pythonTests, /def test_begin_resets_claim_backoff/);
+});
+
+
+test("旧源单游戏验收参数在加载采集器前生效，每局立即确认入库", () => {
+  const argsAt = worker.indexOf("'--rounds', '1', '--normal-rounds', '0'");
+  const importAt = worker.indexOf("const { captureGame, gameRegistrationUnavailable, recoverableRoundError } = await import('../oaks')");
+  assert.ok(argsAt >= 0 && argsAt < importAt);
+  assert.match(worker, /flushEveryRound: !!process.env.OAKS_SINGLE_GAME/);
 });

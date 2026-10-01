@@ -33,14 +33,14 @@ test('解析 game_start.do 内嵌端点：desktop.server_url 即协议地址', (
   assert.throws(() => parseGgxLaunch(html, LAUNCH.replace('gameCode=china_festival', 'gameCode=sun_of_egypt')), /GGX_ENDPOINT_INVALID/);
 });
 
-test('ggx 购买动作固定 bet_per_line=1 并携带会话 bet_factor，普通 spin 不变', () => {
+test('ggx 购买动作保留合法最低投注并携带当前会话倍数', () => {
   const actions = applyGgxSpinParams([
     { name: 'spin', params: { bet_per_line: 50, lines: 25 } },
     { name: 'buy_spin', params: { bet_per_line: 50, lines: 25, selected_mode: 1 } },
   ], [20]);
   assert.deepEqual(actions[0], { name: 'spin', params: { bet_per_line: 50, lines: 25 } });
-  assert.deepEqual(actions[1].params, { bet_per_line: 1, lines: 25, selected_mode: 1, bet_factor: 20 });
-  // 缺省 bet_factor 时回落到实测值 20。
+  assert.deepEqual(actions[1].params, { bet_per_line: 50, lines: 25, selected_mode: 1, bet_factor: 20 });
+  // 会话未声明倍数时不猜测。
   const fallback = applyGgxSpinParams([{ name: 'buy_spin', params: { selected_mode: 2 } }], undefined);
-  assert.equal(fallback[0].params.bet_factor, 20);
+  assert.equal(fallback[0].params.bet_factor, undefined);
 });

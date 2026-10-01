@@ -6,6 +6,8 @@
 // 不应拖垮整个对照测试。
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { MongoClient } from "mongodb";
+import { MONGO_COLLECTION } from "../config";
 import { ggxPlayPageUrl } from "../src/ggx-launch";
 import type { RegistryGame } from "../src/catalog";
 
@@ -67,6 +69,11 @@ async function main(): Promise<void> {
   const { readRegistry } = await import("../catalog-sync");
   const registry = await readRegistry();
   const summary: Record<string, unknown>[] = [];
+  const mongo = new MongoClient(process.env.OAKS_MONGO_URI, { serverSelectionTimeoutMS: 5000, maxPoolSize: 1 });
+  try {
+  await mongo.connect();
+  const collection = mongo.db(process.env.OAKS_MONGO_DB ?? "oaks_ggx_test").collection(MONGO_COLLECTION);
+  const before = await collection.countDocuments();
   for (const { slug, modes } of spec) {
     if (Date.now() - startedAt > budgetMs) {
       console.log(JSON.stringify({ phase: "budget-stop", note: "总时长预算耗尽，跳过剩余游戏" }));
@@ -108,7 +115,10 @@ async function main(): Promise<void> {
     summary.push({ slug, modes: wanted, outcome, startedAt: gameStartedAt, seconds: Math.round((Date.now() - startedMs) / 1000) });
     console.log(JSON.stringify({ phase: "game-done", slug, outcome, status: result.status }));
   }
-  console.log(JSON.stringify({ phase: "ggx-test-complete", database: process.env.OAKS_MONGO_DB ?? "oaks_ggx_test", summary }));
+  const inserted = await collection.countDocuments() - before;
+  console.log(JSON.stringify({ phase: "ggx-test-complete", database: process.env.OAKS_MONGO_DB ?? "oaks_ggx_test", inserted, summary }));
+  if (inserted <= 0) throw new Error("GGX_NO_NEW_MONGO_ROUNDS");
+  } finally { await mongo.close(); }
 }
 
 main().catch((error) => {

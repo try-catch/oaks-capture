@@ -352,7 +352,7 @@ export async function captureGame(
     if (modeQuota && captureRuntime) await syncModeCountsFromMongo(collection, modeCounts);
     console.log(`[Mongo] 已连接 ${database}.${MONGO_COLLECTION}${repaired ? `，批量修复 ${repaired} 条历史数据` : "，历史数量一致无需重写"}`);
   } catch (error) {
-    if (captureRuntime) throw new Error("测试服 Mongo 连接或去重同步失败，禁止发出官方请求");
+    if (captureRuntime || process.env.OAKS_SOURCE === "ggx") throw new Error("测试服 Mongo 连接或去重同步失败，禁止发出官方请求");
     console.warn(`[Mongo] 未连接，本次仅保存 NDJSON：${(error as Error).message}`);
     await mongo?.close().catch(() => undefined);
     mongo = undefined;
@@ -383,7 +383,7 @@ export async function captureGame(
 
   let quotaActions = buildPlayableActions(session.start, discoverShop(session.start), definition.clientFamily);
   if (process.env.OAKS_SOURCE === "ggx") {
-    quotaActions = applyGgxSpinParams(quotaActions, definition.settings?.betFactor);
+    quotaActions = applyGgxSpinParams(quotaActions, session.start.settings?.bet_factor);
   }
   if (modeQuota) {
     const declared = definition.settings;
@@ -401,8 +401,8 @@ export async function captureGame(
     try {
       const shop = discoverShop(session.start);
       const built = buildPlayableActions(session.start, shop, definition.clientFamily, omitBuyFactor, stringBuyMode);
-      // ggx 源购买动作需要实测参数（bet_per_line=1 + bet_factor），普通 spin 保持阶梯注。
-      const actions = process.env.OAKS_SOURCE === "ggx" ? applyGgxSpinParams(built, definition.settings?.betFactor) : built;
+      // 使用当前会话倍数，购买与普通动作均保留合法最低投注。
+      const actions = process.env.OAKS_SOURCE === "ggx" ? applyGgxSpinParams(built, session.start.settings?.bet_factor) : built;
       if (!actions.length) throw new Error("start 没有可执行动作");
       const needed = modeQuota ? remainingModes()[0] : undefined;
       const action = captureRuntime?.pending()?.action ?? (modeQuota

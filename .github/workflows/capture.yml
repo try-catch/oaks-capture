@@ -147,7 +147,13 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npx playwright install --with-deps ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && 'chrome' || 'chromium' }}
+      - run: |
+          # 浏览器下载偶发 HTTP/2 断流，有限重试后仍失败则保留错误退出。
+          for attempt in 1 2 3; do
+            npx playwright install --with-deps ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && 'chrome' || 'chromium' }} && break
+            [[ "$attempt" == 3 ]] && exit 1
+            sleep 10
+          done
       - run: python3 actions/setup-ssh.py
       - name: Confirm GitHub-hosted Linux execution
         run: |

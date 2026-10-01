@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { remainingModeActions, selectedModeTypes, syncModeCountsFromMongo } from "../oaks";
+import { modeCountsForTargets, remainingModeActions, selectedModeTypes, syncModeCountsFromMongo } from "../oaks";
 import type { PlayAction } from "../src/shop";
 
 const normal: PlayAction = {name: "spin", params: {}};
@@ -47,4 +47,10 @@ test("配额动作可按代码声明模式过滤官方隐藏入口", () => {
 test("重试只选择审计确认缺失的代码模式", () => {
   assert.deepEqual(selectedModeTypes([0, 1, 2, 3], [0, 3]), [0, 3]);
   assert.throws(() => selectedModeTypes([0, 1], [2]), /代码未声明/);
+});
+
+
+test("定向模式配额排除历史普通及其他购买模式的计数", () => {
+  assert.deepEqual(modeCountsForTargets({0: 84139, 1: 13811, 2: 8783}, {2: 10000}), {2: 8783});
+  assert.deepEqual(modeCountsForTargets({1: 20}, {0: 100000, 1: 10000, 2: 10000}), {0: 0, 1: 20, 2: 0});
 });

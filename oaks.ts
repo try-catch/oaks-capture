@@ -267,6 +267,11 @@ export function remainingModeActions(
     .sort((left, right) => Number(actionSpinType(left) === 0) - Number(actionSpinType(right) === 0));
 }
 
+// 定向补量只提交目标模式的计数，不能让历史普通局和其他模式污染配额请求。
+export function modeCountsForTargets(counts: Record<number, number>, targets: Record<number, number>): Record<number, number> {
+  return Object.fromEntries(Object.keys(targets).map(type => [type, counts[Number(type)] ?? 0]));
+}
+
 export async function syncModeCountsFromMongo(collection: any, counts: Record<number, number>): Promise<void> {
   // NDJSON 恢复点可能落后于已确认入库的数据；模式配额以两者较大值为准，避免跨轮超采。
   const rows = await collection.aggregate([
@@ -404,7 +409,7 @@ export async function captureGame(
     if (expected.some(type => !quotaActions.some(action => actionSpinType(action) === type))) throw new Error("官方会话未提供代码声明的全部模式，禁止把缺失模式标记达标");
     quotaActions = quotaActions.filter(action => expected.includes(actionSpinType(action)));
     modeTargets = Object.fromEntries(expected.map(type => [type, type === 0 ? normalRounds : targetPerMode]));
-    if (captureRuntime?.reserveModeTargets) modeTargets = captureRuntime.reserveModeTargets(modeCounts, modeTargets);
+    if (captureRuntime?.reserveModeTargets) modeTargets = captureRuntime.reserveModeTargets(modeCountsForTargets(modeCounts, modeTargets), modeTargets);
   }
   const remainingModes = (): PlayAction[] => remainingModeActions(quotaActions, modeCounts, normalRounds, targetPerMode, modeTargets);
   const isComplete = (): boolean => modeQuota ? remainingModes().length === 0 : coverageComplete(required, counts, targetPerFeature);

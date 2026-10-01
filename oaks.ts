@@ -84,7 +84,7 @@ export function permanentSessionError(error: unknown): boolean {
 /** 只隔离当前游戏；账号级拒绝和 Runner 地区封控仍必须停止。 */
 export function gameRegistrationUnavailable(error: unknown): boolean {
   return (error instanceof ProtocolHttpError && [404, 410].includes(error.status))
-    || (error instanceof ProtocolStatusError && ["GAME_NOT_ALLOWED", "GAME_DATA_UNAVAILABLE"].includes(error.code));
+    || (error instanceof ProtocolStatusError && ["GAME_NOT_ALLOWED", "GAME_DATA_UNAVAILABLE", "GAME_SQL_ERROR"].includes(error.code));
 }
 
 export async function openSessionWithRetry(

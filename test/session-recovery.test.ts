@@ -173,10 +173,12 @@ test("SQL1064诊断只保留合法动作金额和模式类型，不泄露SQL或�
     })),
     (error: unknown) => {
       if (!(error instanceof ProtocolStatusError)) return false;
-      assert.equal(error.code, "INVALID_JSON");
-      assert.equal(recoverableRoundError(error), true);
+      assert.equal(error.code, "GAME_SQL_ERROR");
+      assert.equal(recoverableRoundError(error), false);
+      assert.equal(gameRegistrationUnavailable(error), true);
+      assert.ok(error.message.length <= 200);
       assert.match(error.message, /"action":"buy_spin"/);
-      assert.match(error.message, /"selected_mode":\{"value":2,"type":"string"\}/);
+      assert.match(error.message, /"selected_mode":\[2,"string"\]/);
       assert.doesNotMatch(error.message, /secret|private_sql|session_id|token|bet_factor/);
       return true;
     },

@@ -172,11 +172,11 @@ export async function command(endpoint: string, cookie: string, name: string, ex
     // SQL 语法错误可能由动作参数触发；只记录白名单金额/模式及类型，禁止输出 SQL、会话和令牌。
     if (/\bError\s+1064\b/.test(text)) {
       const action = extra.action ?? {};
-      const params = Object.fromEntries(["bet_per_line", "lines", "bet_factor", "selected_mode", "ante_bet"]
+      const params = Object.fromEntries(["selected_mode", "bet_per_line", "lines", "bet_factor", "ante_bet"]
         .filter(key => ["number", "string"].includes(typeof action.params?.[key]) && /^\d+(?:\.\d+)?$/.test(String(action.params[key])) && Number.isFinite(Number(action.params[key])))
-        .map(key => [key, { value: Number(action.params[key]), type: typeof action.params[key] }]));
+        .map(key => [key, [Number(action.params[key]), typeof action.params[key]]]));
       const actionName = typeof action.name === "string" && /^[a-z_]{1,40}$/.test(action.name) ? action.name : "unknown";
-      throw new ProtocolStatusError("INVALID_JSON", `${name}: SQL Error 1064，请核对动作参数 ${JSON.stringify({ action: actionName, params })}`);
+      throw new ProtocolStatusError("GAME_SQL_ERROR", `${name}: SQL1064 ${JSON.stringify({ action: actionName, params })}`);
     }
     const prefix = text.slice(0, 64).replace(/[^A-Za-z0-9 ]/g, "").slice(0, 48);
     throw new ProtocolStatusError("INVALID_JSON", `${name}: 官方响应不是 JSON(type=${response.headers.get("content-type") ?? "none"},bytes=${text.length}${prefix ? `,prefix=${prefix}` : ""})`);

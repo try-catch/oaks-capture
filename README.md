@@ -46,7 +46,8 @@ Secrets：`OAKS_SSH_KEY`、`OAKS_KNOWN_HOSTS`、`OAKS_SSH_HOST`、`OAKS_MONGO_HO
 启动链路（实机核实，见 `src/ggx-launch.ts`）：试玩页 `/mobile/index/play/id/<id>.html` 每次铸造
 一次性令牌 → 页面内嵌 `game_start.do?gameCode=<官方slug>&token=…` → 其 launcher 配置的
 `desktop.server_url` 即 gsc 协议端点（`/gs/<gameCode>/desktop/<令牌>/prod/`，可直接 fetch）。
-购买动作使用会话声明的最低 `bets` 和当前 `bet_factor`。2026-10-01 实测：强制
+普通、加注和购买统一使用会话声明的最低 `bets`、最低可选 `lines`，购买使用最低可选 `bet_factor`。
+最低购买费用超过初始试玩余额时直接报 `GGX_MINIMUM_BET_UNAFFORDABLE`，不重复登录；新源的 `CLIENT_ERROR` 也直接失败，避免把参数拒绝当作网络问题重试。2026-10-01 实测：强制
 `bet_per_line=1` 返回 `CLIENT_ERROR`；合法最低投注购买返回 `BET_EXCEED`，试玩余额不足。
 不得通过使用未声明投注迁就余额；整轮无 Mongo 新增时以失败结束，不能把 workflow 成功当采集成功。slug→试玩页 ID 映射固化在 `games/ggx-catalog.json`，
 只收录与 registry slug 完全一致的条目；新增游戏需先逐一核实 gameCode 再入目录。

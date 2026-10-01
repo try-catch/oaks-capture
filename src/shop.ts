@@ -45,10 +45,16 @@ export function discoverShop(start: JSONMap): ShopInventory {
   };
 }
 
+// 金额、线数和计费倍数均从会话允许列表取最低正数，不依赖列表排序。
+function minimumAllowed(value: unknown, fallback: number): number {
+  const values = (Array.isArray(value) ? value : [value]).map(Number).filter(v => Number.isFinite(v) && v > 0);
+  return values.length ? Math.min(...values) : fallback;
+}
+
 // ggx 只补会话声明的计费倍数，保留 buildPlayableActions 选出的合法最低投注。
 // 不能为迁就试玩余额而使用 bets 之外的 1，否则服务端返回 CLIENT_ERROR。
 export function applyGgxSpinParams(actions: PlayAction[], betFactor: unknown): PlayAction[] {
-  const factor = Array.isArray(betFactor) ? Number(betFactor[0]) : Number(betFactor);
+  const factor = minimumAllowed(betFactor, NaN);
   return actions.map((action) => action.name === "buy_spin" && Number.isFinite(factor) && factor > 0
     ? { ...action, params: { ...action.params, bet_factor: factor } }
     : action);
@@ -57,15 +63,12 @@ export function applyGgxSpinParams(actions: PlayAction[], betFactor: unknown): P
 export function buildPlayableActions(start: JSONMap, shop: ShopInventory, clientFamily?: string, omitBuyFactor = new Set<number>(), stringBuyMode = new Set<number>()): PlayAction[] {
   const context = start.context ?? {};
   const state = context.current ? context[context.current] ?? {} : {};
-  const configuredBets = Array.isArray(start.settings?.bets)
-    ? start.settings.bets.map((value: unknown) => Number(value)).filter((value: number) => Number.isFinite(value) && value > 0)
-    : [];
-  // 采集使用官方允许的最低下注，避免高倍购买快速耗尽试玩余额。
-  const betPerLine = configuredBets.length ? Math.min(...configuredBets) : Number(state.bet_per_line ?? 1);
-  const lines = Number(state.lines ?? 1);
+  // 普通、加注和购买统一使用最低合法投注与最低可选线数。
+  const betPerLine = minimumAllowed(start.settings?.bets, Number(state.bet_per_line ?? 1));
+  const lines = minimumAllowed(start.settings?.lines, Number(state.lines ?? 1));
   // 官方客户端购买请求会单独传 bet_factor；部分游戏的计费倍数不等于线数。
   // Kendoo 的购买入口直接调用 sendPlayAsync，官方请求不包含 bet_factor。
-  const betFactor = Number(start.settings?.bet_factor?.[0]);
+  const betFactor = minimumAllowed(start.settings?.bet_factor, NaN);
   const betParams = { bet_per_line: betPerLine, lines };
   const availableActions = new Set((Array.isArray(context.actions) ? context.actions : []).map(String));
   const actions: PlayAction[] = [];

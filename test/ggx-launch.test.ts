@@ -37,7 +37,7 @@ test('ggx 购买动作保留合法最低投注并携带当前会话倍数', () =
   const actions = applyGgxSpinParams([
     { name: 'spin', params: { bet_per_line: 50, lines: 25 } },
     { name: 'buy_spin', params: { bet_per_line: 50, lines: 25, selected_mode: 1 } },
-  ], [20]);
+  ], [50, 20]);
   assert.deepEqual(actions[0], { name: 'spin', params: { bet_per_line: 50, lines: 25 } });
   assert.deepEqual(actions[1].params, { bet_per_line: 50, lines: 25, selected_mode: 1, bet_factor: 20 });
   // 会话未声明倍数时不猜测。

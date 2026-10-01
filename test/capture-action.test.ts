@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chooseAction, retryDelayMs } from "../oaks";
+import { assertGgxMinimumAffordable, chooseAction, retryDelayMs } from "../oaks";
 import { GAME_SWITCH_DELAY_MS, SPIN_DELAY_MS } from "../config";
 import type { PlayAction } from "../src/shop";
 import { actionSpinType, BOOSTER_SPIN_TYPE_OFFSET, protocolAction, ProtocolHttpError, roundSpinType } from "../src/protocol";
@@ -53,4 +53,14 @@ test("协议限流完整遵守 Retry-After，普通错误按指数退避", () =>
 test("默认采集节奏为两秒且游戏切换等待十秒", () => {
   assert.equal(SPIN_DELAY_MS, 2_000);
   assert.equal(GAME_SWITCH_DELAY_MS, 10_000);
+});
+
+
+test("新源最低购买费用超过初始余额时直接报原因，不重登空跑", () => {
+  const shop = {buyBonuses: [{providerMode: 1, spinType: 1, price: 100, feature: "buy-bonus:1"}], boosters: []};
+  const action = {name: "buy_spin", params: {bet_per_line: 50, lines: 25, bet_factor: 20, selected_mode: 1}};
+  assert.throws(() => assertGgxMinimumAffordable(action, shop, 10000), /最低购买费用=100000.*试玩余额=10000/);
+  assert.doesNotThrow(() => assertGgxMinimumAffordable(action, shop, 100000));
+  assert.doesNotThrow(() => assertGgxMinimumAffordable(action, shop, undefined));
+  assert.doesNotThrow(() => assertGgxMinimumAffordable(actions[0], shop, 0));
 });

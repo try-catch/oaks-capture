@@ -78,3 +78,14 @@ test("服务要求字符串模式时可按购买档位回退", () => {
   const actions = buildPlayableActions(start, discoverShop(start), "clients_hraymo", new Set(), new Set([1]));
   assert.deepEqual(actions[1].params, {bet_per_line: 2, lines: 25, selected_mode: "1"});
 });
+
+
+test("所有模式均选最低投注、线数和购买倍数，不沿用默认高档", () => {
+  const start = {settings: {bets: [50, 20, 100], lines: [25, 5, 10], bet_factor: [50, 20], buy_bonus_prices: {1: 70}, booster_prices: {1: 1.25}}, context: {current: "spins", actions: ["spin", "buy_spin"], spins: {bet_per_line: 100, lines: 25}}};
+  const actions = buildPlayableActions(start, discoverShop(start));
+  for (const action of actions) {
+    assert.equal(action.params.bet_per_line, 20);
+    assert.equal(action.params.lines, 5);
+  }
+  assert.equal(actions.at(-1)?.params.bet_factor, 20);
+});

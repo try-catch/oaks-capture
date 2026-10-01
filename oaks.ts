@@ -49,7 +49,7 @@ export function selectedModeTypes(expected: number[], requested: number[]): numb
 }
 
 // 官方会话被重开后，当前这一局已经无法完成，但游戏本身可以继续。
-// BET_EXCEED 是 ggx 试玩余额耗尽：重新登录铸造新令牌即恢复固定试玩余额。
+// BET_EXCEED 可能是余额耗尽，也可能是最低购买费用超过初始试玩余额；后者不能靠重登解决。
 const RECOVERABLE_ROUND_CODES = ["GAME_REOPENED", "GAME_CLOSED", "SESSION_EXPIRED", "SESSION_NOT_FOUND", "SERVER_ERROR", "FUNDS_EXCEED", "BET_EXCEED", "INVALID_JSON"];
 
 // “这一局不能再用了”的原因：官方业务失败（含会话重开），
@@ -242,6 +242,18 @@ function actionCostMultiplier(action: PlayAction, shop: ShopInventory): number {
   return entries.find((entry) => entry.feature === feature)?.price ?? 1;
 }
 
+// 新源初始余额不足以支付最低购买费用时，停止该游戏，避免反复重登空跑。
+export function assertGgxMinimumAffordable(action: PlayAction, shop: ShopInventory, balance: unknown): void {
+  if (action.name !== "buy_spin" || balance === undefined || balance === null) return;
+  const factor = Number(action.params.bet_factor ?? action.params.lines);
+  const price = actionCostMultiplier(action, shop);
+  const cost = Number(action.params.bet_per_line) * factor * price;
+  const available = Number(balance);
+  if (Number.isFinite(cost) && cost > 0 && Number.isFinite(available) && cost > available) {
+    throw new Error(`GGX_MINIMUM_BET_UNAFFORDABLE: 最低购买费用=${cost}，试玩余额=${available}，bet_per_line=${action.params.bet_per_line}，bet_factor=${factor}，购买倍数=${price}`);
+  }
+}
+
 // 配额依据冻结的模式列表计算，重新登录不能让尚未完成的购买模式消失。
 export function remainingModeActions(
   actions: PlayAction[], counts: Record<number, number>, normal: number, special: number,
@@ -409,6 +421,7 @@ export async function captureGame(
         ? actions.find(candidate => needed && actionSpinType(candidate) === actionSpinType(needed))
         : chooseAction(actions, counts, targetPerFeature, required, actionEvidence, captured));
       if (!action) throw new Error("当前会话缺少待采模式，重新登录后重试");
+      if (process.env.OAKS_SOURCE === "ggx") assertGgxMinimumAffordable(action, shop, session.start.user?.balance);
       attemptedAction = action;
       const rawFrames = await playRound(session, action);
       attempted++;
@@ -493,6 +506,8 @@ export async function captureGame(
       const message = (error as Error).message;
       // 预算与限速信号必须交回 worker，由它决定退避还是停机。
       if (message === "ACTIONS_BUDGET" || message === "ACTIONS_RATE_LIMIT" || message === "ACTIONS_HALTED") throw error;
+      if (message.startsWith("GGX_MINIMUM_BET_UNAFFORDABLE") ||
+          (process.env.OAKS_SOURCE === "ggx" && error instanceof ProtocolStatusError && error.code === "CLIENT_ERROR")) throw error;
       const retryBuyParameters = message.includes("SERVER_ERROR") && attemptedAction?.name === "buy_spin";
       if (retryBuyParameters && attemptedAction) {
         const spinType = actionSpinType(attemptedAction);

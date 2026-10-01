@@ -82,16 +82,16 @@ test("session start 缺少参数时使用目录回退值", () => {
   assert.deepEqual(settings, { betPerLine: 2, lines: 20, defaultBet: 40 });
 });
 
-test("buy mode discovery 同时支持一基对象和零基数组", () => {
+test("购买对象和价格数组均映射到从1开始的协议模式，分桶保持不变", () => {
   assert.deepEqual(parseBuyModes({ buy_bonus_prices: { 1: 30, 2: 75 } }), [
     { providerMode: 1, spinType: 1, price: 30, source: "map" },
     { providerMode: 2, spinType: 2, price: 75, source: "map" },
   ]);
   assert.deepEqual(parseBuyModes({ buy_bonus_price: [65, 200, 150, 400] }), [
-    { providerMode: 0, spinType: 1, price: 65, source: "array" },
-    { providerMode: 1, spinType: 2, price: 200, source: "array" },
-    { providerMode: 2, spinType: 3, price: 150, source: "array" },
-    { providerMode: 3, spinType: 4, price: 400, source: "array" },
+    { providerMode: 1, spinType: 1, price: 65, source: "array" },
+    { providerMode: 2, spinType: 2, price: 200, source: "array" },
+    { providerMode: 3, spinType: 3, price: 150, source: "array" },
+    { providerMode: 4, spinType: 4, price: 400, source: "array" },
   ]);
 });
 

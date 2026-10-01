@@ -82,7 +82,7 @@ export function buildPlayableActions(start: JSONMap, shop: ShopInventory, client
     for (const entry of shop.buyBonuses) {
       actions.push({
         name: "buy_spin",
-        params: { ...betParams, ...(clientFamily !== "clients_kendoo" && (entry.spinType === undefined || !omitBuyFactor.has(entry.spinType)) && Number.isFinite(betFactor) && betFactor > 0 ? { bet_factor: betFactor } : {}), selected_mode: entry.spinType !== undefined && stringBuyMode.has(entry.spinType) ? entry.providerMode.toString() : entry.providerMode },
+        params: { ...betParams, ...(clientFamily !== "clients_kendoo" && (entry.spinType === undefined || !omitBuyFactor.has(entry.spinType)) && Number.isFinite(betFactor) && betFactor > 0 ? { bet_factor: betFactor } : {}), selected_mode: Array.isArray(start.settings?.buy_bonus_price) || (entry.spinType !== undefined && stringBuyMode.has(entry.spinType)) ? entry.providerMode.toString() : entry.providerMode },
         spinType: entry.spinType,
       });
     }

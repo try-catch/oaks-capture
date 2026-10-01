@@ -82,10 +82,11 @@ export function parseBuyModes(settings: JSONMap): BuyMode[] {
   }
   if (hasArray) {
     if (!Array.isArray(array) || array.length === 0) throw new Error("buy_bonus_price 必须是非空数组");
-    return assertUniqueBuyModes(array.map((value, providerMode) => ({
-      providerMode,
-      spinType: providerMode + 1,
-      price: validPrice(value, `购买模式 ${providerMode}`),
+    return assertUniqueBuyModes(array.map((value, index) => ({
+      // 旧版客户端以 optionType - 1 取数组价格，协议模式从 1 开始。
+      providerMode: index + 1,
+      spinType: index + 1,
+      price: validPrice(value, `购买模式 ${index + 1}`),
       source: "array" as const,
     })));
   }

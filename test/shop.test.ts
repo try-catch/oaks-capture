@@ -17,24 +17,24 @@ test("shop 只为官方可用 selected_mode 构造 buy_spin", () => {
   ]);
 });
 
-test("shop 为零基数组构造官方模式和正整数分桶", () => {
+test("旧版价格数组按客户端构造字符串模式1至N，Mongo分桶不变", () => {
   const start = {
     context: { current: "spins", actions: ["spin", "buy_spin"], spins: { bet_per_line: 10, lines: 5 } },
     settings: { buy_bonus_price: [65, 200, 150, 400] },
   };
   const shop = discoverShop(start);
   assert.deepEqual(shop.buyBonuses[0], {
-    providerMode: 0, spinType: 1, price: 65, feature: "buy-bonus:0",
+    providerMode: 1, spinType: 1, price: 65, feature: "buy-bonus:1",
   });
   const actions = buildPlayableActions(start, shop);
   assert.deepEqual(actions[1], {
     name: "buy_spin",
-    params: { bet_per_line: 10, lines: 5, selected_mode: 0 },
+    params: { bet_per_line: 10, lines: 5, selected_mode: "1" },
     spinType: 1,
   });
   assert.deepEqual(actions.at(-1), {
     name: "buy_spin",
-    params: { bet_per_line: 10, lines: 5, selected_mode: 3 },
+    params: { bet_per_line: 10, lines: 5, selected_mode: "4" },
     spinType: 4,
   });
 });

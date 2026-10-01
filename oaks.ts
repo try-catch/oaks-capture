@@ -50,10 +50,11 @@ export function selectedModeTypes(expected: number[], requested: number[]): numb
 
 // 官方会话被重开后，当前这一局已经无法完成，但游戏本身可以继续。
 // BET_EXCEED 可能是余额耗尽，也可能是最低购买费用超过初始试玩余额；后者不能靠重登解决。
-const RECOVERABLE_ROUND_CODES = ["GAME_REOPENED", "GAME_CLOSED", "SESSION_EXPIRED", "SESSION_NOT_FOUND", "SERVER_ERROR", "FUNDS_EXCEED", "BET_EXCEED", "INVALID_JSON"];
+const RECOVERABLE_ROUND_CODES = ["GAME_REOPENED", "GAME_CLOSED", "SESSION_EXPIRED", "SESSION_NOT_FOUND", "SESSION_UNFINISHED", "SERVER_ERROR", "FUNDS_EXCEED", "BET_EXCEED", "INVALID_JSON"];
 
 // “这一局不能再用了”的原因：官方业务失败（含会话重开），
 // 或协调器判定上一轮结果未知而拒绝重放。两种情况都只需丢弃未完成帧并重新登录。
+// SESSION_UNFINISHED 则直接交回 worker，重新获取试玩入口，不能重复登录旧令牌。
 export function recoverableRoundError(error: unknown): boolean {
   if (error instanceof ProtocolHttpError) return error.status >= 500;
   if (error instanceof ProtocolStatusError) return RECOVERABLE_ROUND_CODES.includes(error.code);
@@ -95,11 +96,21 @@ export async function openSessionWithRetry(
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
     try {
-      return await openSession(definition);
+      const session = await openSession(definition);
+      const context = session.start.context ?? {};
+      const actions = Array.isArray(context.actions) ? context.actions : [];
+      if (process.env.OAKS_SOURCE === "wx" && context.round_finished === false &&
+          actions.length && !actions.includes("spin") && !actions.includes("buy_spin")) {
+        // 旧令牌仍指向结果未知的奖励局；交回 worker，经协调器退避后重走试玩入口。
+        // 不在此续帧或重放，也不把缺少首帧的局计入数据。
+        throw new ProtocolStatusError("SESSION_UNFINISHED", "SESSION_UNFINISHED: 旧试玩会话仍有未完成局，需重新获取入口");
+      }
+      return session;
     } catch (error) {
       lastError = error;
       // 协调器控制信号必须立即交回 worker，不能按会话故障重试。
       if (error instanceof Error && ["ACTIONS_BUDGET", "ACTIONS_RATE_LIMIT", "ACTIONS_HALTED"].includes(error.message)) throw error;
+      if (error instanceof ProtocolStatusError && error.code === "SESSION_UNFINISHED") throw error;
       // 入口不存在或授权明确拒绝时，重试同一请求不会修复配置，停止该游戏并保留数据。
       if (permanentSessionError(error)) throw error;
       if (attempt > maxRetries) break;

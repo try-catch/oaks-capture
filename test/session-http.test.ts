@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fetchText, openSession, ProtocolHttpError, ProtocolStatusError } from '../src/protocol';
-import { gameRegistrationUnavailable, permanentSessionError, openSessionWithRetry } from '../oaks';
+import { gameRegistrationUnavailable, permanentSessionError, openSessionWithRetry, recoverableRoundError } from '../oaks';
 import { CaptureThrottle } from '../src/capture-throttle';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,6 +19,41 @@ test('会话建立立即传播协调器控制信号，不等待或重试', async
       assert.equal(calls, 1);
     }
   } finally { globalThis.fetch = original; }
+});
+
+test('旧站重登进入未完成奖励局时交回 worker 换入口，不续帧或重复登录', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSource = process.env.OAKS_SOURCE;
+  process.env.OAKS_SOURCE = 'wx';
+  try {
+    for (const actions of [['respin'], ['spin', 'buy_spin']]) {
+      const commands: string[] = [];
+      let calls = 0;
+      globalThis.fetch = async (_input, options) => {
+        if (++calls === 1) return new Response(`})(window, ${JSON.stringify({
+          options: { queue: 'queue', token: 'page-token' },
+          desktop: { server_url: '//betman-demo.head.3oaks.com/betman-demo/gs/4_african_drums/desktop/{QUEUE}/demo/' },
+        })}, "//betman-demo.head.3oaks.com/betman-demo/game/runner_config/");`);
+        const body = JSON.parse(String(options?.body));
+        commands.push(body.command);
+        return Response.json(body.command === 'login'
+          ? { status: { code: 'OK' }, session_id: 'session', user: { huid: 'user' } }
+          : { status: { code: 'OK' }, context: { current: 'bonus', round_finished: false, actions } });
+      };
+      const pending = openSessionWithRetry({ slug: '4_african_drums' } as any,
+        { playUrl: 'https://3oaks.ssgfivegame.com/api/v1/games/4_african_drums/play?token=link-token', betPerLine: 0.4, lines: 25, defaultBet: 10 } as any,
+        new CaptureThrottle({ spinDelayMs: 2000, fallbackSpinDelayMs: 2000 }));
+      if (actions.includes('spin')) await pending;
+      else await assert.rejects(pending, error => error instanceof ProtocolStatusError &&
+        error.code === 'SESSION_UNFINISHED' && recoverableRoundError(error));
+      assert.equal(calls, 3);
+      assert.deepEqual(commands, ['login', 'start']);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalSource === undefined) delete process.env.OAKS_SOURCE;
+    else process.env.OAKS_SOURCE = originalSource;
+  }
 });
 
 test('worker 将启动页 HTTP 异常送入统一响应处理，保留限流秒数', () => {

@@ -35,3 +35,7 @@ Secrets：`OAKS_SSH_KEY`、`OAKS_KNOWN_HOSTS`、`OAKS_SSH_HOST`、`OAKS_MONGO_HO
 如果 workflow 被强制取消而 finish 未能释放锁，下次 begin 使用当前 job 的只读 GitHub Token 查询旧 run/attempt；只有 GitHub 确认旧 attempt 已 completed 才回收队列所有权。Token 只通过 SSH 标准输入传递，不落盘。未知请求日志仍会阻止该请求自动重放，需要人工核实。禁止按计时器抢占未确认的请求或队列锁。
 
 验证：`npm run check`、`npm test`、`python3 -m unittest discover -s actions -p 'test_*.py'`。这些测试使用合成协议与临时目录，不发真实采集请求。
+
+2026-10-01 旧源恢复优化：明确用 `wx-single` 验收和 `wx-capture` 正式采集。单游戏参数在加载采集器前设置，定向配额只提交目标模式计数，验收每个完整局立即确认 Mongo。20 节点、24 活跃会话时每节点只启动 2 个进程，总进程从 80 降为 40。
+
+历史文件通过已认证 SSH 的 `gzip -1` 流传输，Runner 解压后校验原始字节数、fsync，再原子替换；异常保留原文件，服务端历史不改动。数量不一致时每 500 局按唯一哈希查询 Mongo，仅回填缺失局；不再反复传输已入库的完整历史。真实速度以实机完整局入库和 `restore-complete`、`timing` 日志为准。

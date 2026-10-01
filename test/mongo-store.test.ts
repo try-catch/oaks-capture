@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, syncMongoRounds, upsertMongoRound, upsertMongoRounds } from "../src/mongo-store";
+import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, syncMongoRounds, upsertMissingMongoRounds, upsertMongoRound, upsertMongoRounds } from "../src/mongo-store";
 
 test("sourceRoundHash 忽略敏感会话字段并保持内容稳定", () => {
   const first = { gameId: 32601, game: "sun_of_egypt", data: [{ request_id: "one", session_id: "secret", context: { total_win: 10 } }] };
@@ -54,4 +54,23 @@ test("实时数据批量 upsert 不扫描集合数量", async () => {
   assert.equal(await upsertMongoRounds(collection, documents, 2), 3);
   assert.equal(estimated, 0);
   assert.deepEqual(batches.map(batch => batch.length), [2, 1]);
+});
+
+
+test("恢复仅回填缺失哈希，不把已存在的完整历史再次写回", async () => {
+  const documents = [{sourceRoundHash: "exists", data: [1]}, {sourceRoundHash: "missing", data: [2]}];
+  const writes: any[] = [];
+  const collection = {
+    async createIndex() {}, async updateOne() {},
+    find(filter: any, options: any) {
+      assert.deepEqual(filter.sourceRoundHash, {$in: ["exists", "missing"], $type: "string"});
+      assert.deepEqual(options.projection, {sourceRoundHash: 1, _id: 0});
+      return {async toArray() { return [{sourceRoundHash: "exists"}]; }};
+    },
+    async bulkWrite(operations: any[]) { writes.push(...operations); },
+  };
+  assert.equal(await upsertMissingMongoRounds(collection, documents), 1);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].updateOne.filter.sourceRoundHash.$eq, "missing");
+  assert.deepEqual(writes[0].updateOne.update.$setOnInsert.data, [2]);
 });

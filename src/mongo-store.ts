@@ -41,6 +41,7 @@ export function sourceRoundHash(document: { gameId?: number; game?: string; data
 interface MongoCollectionLike {
   createIndex(key: Record<string, number>, options?: Record<string, unknown>): Promise<unknown>;
   updateOne(filter: Record<string, unknown>, update: Record<string, unknown>, options: Record<string, unknown>): Promise<unknown>;
+  find?(filter: Record<string, unknown>, options: Record<string, unknown>): { toArray(): Promise<Record<string, unknown>[]> };
   bulkWrite?(...args: any[]): Promise<unknown>;
   estimatedDocumentCount?(): Promise<number>;
 }
@@ -70,6 +71,16 @@ export async function upsertMongoRounds(collection: MongoCollectionLike, documen
     })), { ordered: false });
   }
   return unique.length;
+}
+
+// 恢复时先按唯一哈希查缺口，只补缺失局，避免把已入库的百 MB 历史反复传回 Mongo。
+export async function upsertMissingMongoRounds(collection: MongoCollectionLike, documents: Record<string, unknown>[]): Promise<number> {
+  if (!documents.length) return 0;
+  if (!collection.find) return upsertMongoRounds(collection, documents);
+  const hashes = documents.map(document => String(document.sourceRoundHash ?? sourceRoundHash(document as { gameId?: number; game?: string; data: unknown })));
+  const existing = new Set((await collection.find({sourceRoundHash: {$in: hashes, $type: "string"}},
+    {projection: {sourceRoundHash: 1, _id: 0}}).toArray()).map(document => String(document.sourceRoundHash)));
+  return upsertMongoRounds(collection, documents.filter((_document, index) => !existing.has(hashes[index])));
 }
 
 export async function syncMongoRounds(collection: MongoCollectionLike, documents: Record<string, unknown>[], batchSize = 500): Promise<number> {

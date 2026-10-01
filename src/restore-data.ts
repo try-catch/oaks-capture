@@ -1,4 +1,7 @@
 import fs from 'node:fs';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { createGunzip } from 'node:zlib';
 
 /** 恢复文件逐块落盘，完整接收后才替换目标；不让大文件进入 JSON 行缓冲。 */
 export function restoreData(file: string, bytes: number,
@@ -27,4 +30,29 @@ export function restoreData(file: string, bytes: number,
   }
   fs.closeSync(fd);
   fs.renameSync(temporary, file);
+}
+
+
+/** SSH 压缩流恢复，省去大文件逐块 RPC；精确校验后才原子替换。 */
+export async function restoreCompressedData(file: string, bytes: number, input: Readable, stopped: () => boolean): Promise<void> {
+  if (!Number.isSafeInteger(bytes) || bytes < 0) throw new Error('RESTORE_SIZE');
+  const temporary = file + '.restoring';
+  let received = 0;
+  try {
+    await pipeline(input, createGunzip(), new Transform({
+      transform(chunk: Buffer, _encoding, done) {
+        received += chunk.length;
+        if (stopped()) return done(new Error('ACTIONS_BUDGET'));
+        if (received > bytes) return done(new Error('RESTORE_TRUNCATED'));
+        done(null, chunk);
+      },
+    }), fs.createWriteStream(temporary, {mode: 0o600}));
+    if (received !== bytes) throw new Error('RESTORE_TRUNCATED');
+    const fd = fs.openSync(temporary, 'r');
+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    fs.rmSync(temporary, {force: true});
+    throw error;
+  }
 }

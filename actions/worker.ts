@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { isIP } from 'node:net';
-import { spawnSync, fork } from 'node:child_process';
+import { spawnSync, fork, spawn } from 'node:child_process';
 import { installCaptureRuntime, PendingRound } from '../src/capture-runtime';
 import { CoordinatorChannel } from '../src/coordinator-channel';
-import { restoreData } from '../src/restore-data';
+import { restoreData, restoreCompressedData } from '../src/restore-data';
 import { countNdjsonLines } from '../src/ndjson-lines';
 import { browserFetch, closeBrowserTransport, fetchFailureDiagnostic } from '../src/browser-transport';
 import { ProtocolHttpError } from '../src/protocol';
@@ -78,6 +78,21 @@ function syncFiles(): void {
     if (fs.existsSync(file)) files[name] = fs.readFileSync(file, 'utf8');
   }
   rpc('files', { files });
+}
+
+// 已认领的历史文件只读传输；不经过协调器全局锁，不改动服务端历史。
+async function restoreHistory(file: string, bytes: number): Promise<void> {
+  if (!/^[a-z0-9_]+$/.test(slug)) throw new Error('RESTORE_SLUG');
+  if (bytes === 0) { restoreData(file, 0, () => { throw new Error('RESTORE_EMPTY'); }, stopped); return; }
+  const child = spawn('ssh', ['-F', process.env.OAKS_SSH_CONFIG!, 'oaks-store',
+    `sudo gzip -1 -c -- /api/api_new/tools/capture-oaks/output/${slug}/${slug}.ndjson`], {stdio: ['ignore', 'pipe', 'ignore']});
+  const exited = new Promise<void>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', code => code === 0 ? resolve() : reject(new Error('RESTORE_SSH_FAILED')));
+  });
+  const restoring = restoreCompressedData(file, bytes, child.stdout!, stopped);
+  try { await Promise.all([restoring, exited]); }
+  catch (error) { child.kill('SIGTERM'); await restoring.catch(() => undefined); throw error; }
 }
 
 function stopped(): boolean { return stopping || Date.now() >= deadline; }
@@ -330,8 +345,9 @@ async function runThread(): Promise<void> {
       if (!game) throw new Error('REGISTRY_MISMATCH');
       const restored = rpc('load', { chunked: true });
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-      restoreData(path.join(directory, `${slug}.ndjson`), restored.dataBytes,
-        (offset, size) => rpc('load_chunk', { offset, size }), stopped);
+      const restoreStarted = Date.now();
+      await restoreHistory(path.join(directory, `${slug}.ndjson`), restored.dataBytes);
+      realLog(JSON.stringify({worker, slug, phase: 'restore-complete', bytes: restored.dataBytes, seconds: Math.round((Date.now() - restoreStarted) / 1000)}));
       for (const [name, value] of Object.entries(restored.files)) fs.writeFileSync(path.join(directory, name), String(value), { mode: 0o600 });
     } catch {
       // 准备阶段没有新数据；不要写回半份覆盖率，也不遗留 running 租约。

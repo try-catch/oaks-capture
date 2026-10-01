@@ -13,7 +13,7 @@ import { CaptureThrottle } from "./src/capture-throttle";
 import { numberOption, selectGames, stringOption } from "./src/cli";
 import { classifyRound, discoverFeatureInventory, FeatureInventory, includeObservedFeatures } from "./src/features";
 import { discoverGame } from "./src/game-definition";
-import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, upsertMongoRound, upsertMongoRounds } from "./src/mongo-store";
+import { ensureMongoIndexes, sanitizeProtocolData, sourceRoundHash, upsertMissingMongoRounds, upsertMongoRound, upsertMongoRounds } from "./src/mongo-store";
 import { actionFeatureKey, actionSpinType, command, JSONMap, nextAction, openSession, protocolAction, ProtocolHttpError, ProtocolStatusError, roundBet, roundSpinType, Session } from "./src/protocol";
 import { buildPlayableActions, discoverShop, applyGgxSpinParams, PlayAction, ShopInventory } from "./src/shop";
 import { validateGameRound } from "./src/validators";
@@ -361,9 +361,9 @@ export async function captureGame(
         let batch: CapturedDocument[] = [];
         for await (const document of readDocuments(ndjson)) {
           batch.push(document);
-          if (batch.length >= 25) { repaired += await upsertMongoRounds(collection, batch, 25); batch = []; }
+          if (batch.length >= 500) { repaired += await upsertMissingMongoRounds(collection, batch); batch = []; }
         }
-        repaired += await upsertMongoRounds(collection, batch, 25);
+        repaired += await upsertMissingMongoRounds(collection, batch);
       }
     }
     if (modeQuota && captureRuntime) await syncModeCountsFromMongo(collection, modeCounts);

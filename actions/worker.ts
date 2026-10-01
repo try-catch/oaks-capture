@@ -31,7 +31,7 @@ let alternateLaunch: { url: string; html: string } | undefined;
 // 采集期会屏蔽 console.log 以免把工具日志带进公开 Actions 日志；
 // 但吞吐诊断行只含数字与节点标识，用原始引用绕过屏蔽输出。
 const realLog = console.log.bind(console);
-const timing = { permit: 0, fetch: 0, respond: 0, append: 0, mongo: 0, polls: 0, documents: 0 };
+const timing = { permit: 0, permitWait: 0, fetch: 0, respond: 0, append: 0, mongo: 0, polls: 0, documents: 0 };
 process.on('SIGTERM', () => { stopping = true; });
 process.on('SIGINT', () => { stopping = true; });
 
@@ -170,7 +170,7 @@ function installDurability(): void {
         const n = timing.documents;
         realLog(JSON.stringify({
           worker, phase: 'timing', docs: n,
-          permitMs: Math.round(timing.permit / n), fetchMs: Math.round(timing.fetch / n),
+          permitMs: Math.round(timing.permit / n), permitWaitMs: Math.round(timing.permitWait / n), fetchMs: Math.round(timing.fetch / n),
           respondMs: Math.round(timing.respond / n), appendMs: Math.round(timing.append / n),
           mongoMs: Math.round(timing.mongo / n),
           permitPolls: Number((timing.polls / n).toFixed(2)),
@@ -207,7 +207,9 @@ function installDurability(): void {
       if (permit.stop) throw new Error(permit.until > Date.now() ? 'ACTIONS_RATE_LIMIT' : 'ACTIONS_BUDGET');
       if (permit.granted) break;
       timing.polls += 1;
+      const waitStarted = Date.now();
       await new Promise(resolve => setTimeout(resolve, Math.min(30_000, permit.wait)));
+      timing.permitWait += Date.now() - waitStarted;
     }
     // 不设置 HTTP/SOCKS 代理：真实 fetch 在 GitHub-hosted Runner 内执行。
     const fetchStarted = Date.now();
@@ -274,7 +276,7 @@ async function handleWxLaunchFailure(error: unknown): Promise<boolean> {
   try { rpc('done', { status: 'failed', reason }); released = true; }
   catch { realLog(JSON.stringify({ worker, slug, note: 'WX_LAUNCH_DONE_FAILED' })); }
   realLog(JSON.stringify({ worker, slug, phase: 'wx-launch-failed', reason }));
-  if (reason === 'WX_SOURCE_UNAVAILABLE' && released && !process.env.OAKS_SINGLE_GAME) {
+  if (['WX_SOURCE_UNAVAILABLE', 'WX_LINK_INVALID_JSON', 'WX_LINK_INVALID'].includes(reason) && released && !process.env.OAKS_SINGLE_GAME) {
     await new Promise(resolve => setTimeout(resolve, numberFromEnv('OAKS_GAME_SWITCH_DELAY_MS', 10_000)));
     return true;
   }

@@ -32,3 +32,17 @@ test('旧站未提供该游戏时保留明确分类', async () => {
     await assert.rejects(wxLaunchUrl('grand'), /WX_SOURCE_UNAVAILABLE/);
   } finally { globalThis.fetch = original; }
 });
+
+
+test('异常链接响应分类且不泄露正文，非法 URL 按无效链接处理', async () => {
+  assert.equal(isWxLaunchUrl('not-a-url', 'grand'), false);
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response('自动生成失败: secret-session-token');
+    await assert.rejects(wxLaunchUrl('coin_volcano_2'), error => error instanceof Error && error.message === 'WX_LINK_INVALID_JSON');
+    for (const body of [null, { success: true, data: 'invalid-secret-url' }]) {
+      globalThis.fetch = async () => Response.json(body);
+      await assert.rejects(wxLaunchUrl('coin_volcano_2'), /WX_LINK_INVALID$/);
+    }
+  } finally { globalThis.fetch = original; }
+});

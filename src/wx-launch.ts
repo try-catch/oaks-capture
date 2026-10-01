@@ -3,7 +3,8 @@ import { chromium } from 'playwright';
 import { parsePlayConfig } from './game-definition';
 
 export function isWxLaunchUrl(value: string, slug: string): boolean {
-  const url = new URL(value);
+  let url: URL;
+  try { url = new URL(value); } catch { return false; }
   return url.protocol === 'https:' && url.hostname === '3oaks.ssgfivegame.com' &&
     url.pathname === `/api/v1/games/${slug}/play`;
 }
@@ -16,7 +17,10 @@ export async function wxLaunchUrl(slug: string): Promise<string> {
       gameBrand: '3oaks', gameType: 'slot', gameId: slug, language: 'en-us' }),
   });
   if (!response.ok) throw new Error(`WX_LINK_HTTP_${response.status}`);
-  const result = await response.json() as { success?: boolean; data?: string };
+  let result: { success?: boolean; data?: string } | null;
+  try { result = await response.json(); }
+  catch { throw new Error('WX_LINK_INVALID_JSON'); }
+  if (!result || typeof result !== 'object') throw new Error('WX_LINK_INVALID');
   if (result.success === false) throw new Error('WX_SOURCE_UNAVAILABLE');
   if (result.success !== true || typeof result.data !== 'string' || !isWxLaunchUrl(result.data, slug) ||
       !new URL(result.data).searchParams.get('token')) throw new Error('WX_LINK_INVALID');

@@ -66,6 +66,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
+      OAKS_SOURCE: ${{ (inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && 'wx' || '' }}
       OAKS_THREADS: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single') && '1' || '4' }}
       OAKS_NODES: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single') && '1' || '20' }}
       OAKS_MAX_CLAIMS: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single') && '1' || '24' }}

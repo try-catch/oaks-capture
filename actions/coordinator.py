@@ -444,6 +444,7 @@ class Store:
                 'maxInFlight': positive_int(req.get('maxInFlight'), threads * nodes),
                 # 非 workflow 调用仍保留保守回退；正式 workflow 会显式传入 24。
                 'maxClaims': positive_int(req.get('maxClaims'), 6),
+                'fillIdleNormal': req.get('fillIdleNormal') is True,
                 'maxShards': min(2, positive_int(req.get('maxShards'), 2)),
                 'claimStartSpacingMs': positive_int(req.get('claimStartSpacingMs'), 0),
                 'deadline': now + positive_int(req.get('deadlineMinutes'), 40) * 60_000,
@@ -518,16 +519,19 @@ class Store:
                     continue
                 return self.grant_claim(state, req, worker, node, slug, secondary_key, True, 2)
 
-            # 所有可用购买/加注游戏都已分片或已结束时，才恢复单节点普通模式采集。
-            unresolved_modes = any(
+            # 用户允许旧站用空闲名额补普通局，仍为未完成购买/加注保留席位。
+            unresolved_modes = [slug for slug in mode_games if
                 not state.get('modeQuotas', {}).get(slug, {}).get('specialComplete')
                 and not state.get('modeQuotas', {}).get(slug, {}).get('unavailable')
                 and not any(claim_slug(key, claim) == slug and claim.get('status') == 'failed'
                             for key, claim in state['claims'].items())
-                for slug in mode_games
-            )
+            ]
             if unresolved_modes:
-                return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
+                normal_running = sum(not claim.get('specialOnly') for claim in running)
+                if (not state['topology'].get('fillIdleNormal')
+                        or normal_running >= max(0, state['topology']['maxClaims'] - len(unresolved_modes))
+                        or any(claim.get('specialOnly') and claim.get('node') == node for claim in running)):
+                    return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
 
             for slug in state['games']:
                 claim = state['claims'].get(slug)

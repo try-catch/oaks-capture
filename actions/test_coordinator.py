@@ -124,6 +124,36 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.0'},
                                          check_legacy=False)['slug'], 'g4')
 
+    def test_idle_normal_keeps_purchase_priority_and_reserves_retry_slot(self):
+        atomic(self.root / 'games/registry.json', {'games': [
+            {'slug': 'one', 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}},
+            {'slug': 'two'}, {'slug': 'three'}, {'slug': 'four'},
+        ]})
+        self.call('end')
+        self.call('begin', nodes=3, maxClaims=3, maxShards=1, fillIdleNormal=True)
+        def claim(worker):
+            return self.store.call({'op': 'claim', 'run': '100-1', 'worker': worker}, check_legacy=False)
+        self.assertTrue(claim('1.0')['specialOnly'])
+        self.assertEqual((claim('2.0')['slug'], claim('3.0')['slug']), ('two', 'three'))
+        self.store.call({'op': 'done', 'run': '100-1', 'worker': '1.0', 'slug': 'one',
+                         'status': 'retryable', 'count': 0, 'reason': 'SESSION_UNFINISHED'}, check_legacy=False)
+        self.assertIn('wait', claim('4.0'))  # 普通局不能抢走等待重试的购买名额。
+        state = read(self.store.state_path)
+        state['claims']['one']['retryAt'] = 0
+        atomic(self.store.state_path, state)
+        self.assertEqual(claim('4.0')['slug'], 'one')
+        self.assertEqual(len([c for c in self.call('status')['claims'].values() if c['status'] == 'running']), 3)
+
+    def test_idle_normal_does_not_share_purchase_node(self):
+        self.call('end')
+        atomic(self.root / 'games/registry.json', {'games': [
+            {'slug': 'one', 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}}, {'slug': 'two'},
+        ]})
+        self.call('begin', nodes=2, maxClaims=4, maxShards=1, fillIdleNormal=True)
+        self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.0'}, check_legacy=False)
+        self.assertIn('wait', self.store.call({'op': 'claim', 'run': '100-1', 'worker': '1.1'}, check_legacy=False))
+        self.assertEqual(self.store.call({'op': 'claim', 'run': '100-1', 'worker': '2.0'}, check_legacy=False)['slug'], 'two')
+
     def test_site_catalog_prioritizes_listed_games_without_hiding_others(self):
         atomic(self.root / 'games/registry.json', {'games': [
             {'slug': slug, 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}}

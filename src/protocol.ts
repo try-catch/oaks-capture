@@ -167,6 +167,8 @@ export async function command(endpoint: string, cookie: string, name: string, ex
   try { result = JSON.parse(text) as JSONMap; }
   catch {
     // 非 JSON 响应是部分游戏 play 持续失败的主因；只输出白名单脱敏摘要（类型/字节数/字母数字前缀），不回传正文或任何取值。
+    // 数据表不存在不是瞬态网络故障，重开会话不会补出上游数据表。
+    if (/\bError\s+1146\b/.test(text)) throw new ProtocolStatusError("GAME_DATA_UNAVAILABLE", `${name}: 试玩接口返回数据表不存在(Error 1146)，停止本游戏重试`);
     const prefix = text.slice(0, 64).replace(/[^A-Za-z0-9 ]/g, "").slice(0, 48);
     throw new ProtocolStatusError("INVALID_JSON", `${name}: 官方响应不是 JSON(type=${response.headers.get("content-type") ?? "none"},bytes=${text.length}${prefix ? `,prefix=${prefix}` : ""})`);
   }

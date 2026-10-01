@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { recoverableRoundError, retryDelayMs } from "../oaks";
+import { gameRegistrationUnavailable, recoverableRoundError, retryDelayMs } from "../oaks";
 import { command, ProtocolHttpError, ProtocolStatusError } from "../src/protocol";
 
 const worker = fs.readFileSync(path.resolve(__dirname, "..", "actions", "worker.ts"), "utf8");
@@ -148,4 +148,19 @@ test("worker 在 GitHub 本地缓存响应且只向测试服报告小型状态",
   assert.match(worker, /function reasonOf/);
   // 公开日志不得出现完整 URL（含队列令牌）或官方响应正文。
   assert.match(worker, /replace\(\/https\?:\\\/\\\/\\S\+\/g, '<url>'\)/);
+});
+
+
+test("上游缺少游戏数据表时隔离本游戏，不重复重登也不泄漏表名", async () => {
+  await assert.rejects(
+    () => withFetch("Error 1146 (42S02): Table private_db.secret_table doesn't exist", () => command("https://example.test/g", "", "play", {})),
+    (error: unknown) => {
+      if (!(error instanceof ProtocolStatusError)) return false;
+      assert.equal(error.code, "GAME_DATA_UNAVAILABLE");
+      assert.equal(recoverableRoundError(error), false);
+      assert.equal(gameRegistrationUnavailable(error), true);
+      assert.doesNotMatch(error.message, /private_db|secret_table/);
+      return true;
+    },
+  );
 });

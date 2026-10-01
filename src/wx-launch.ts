@@ -26,7 +26,8 @@ export async function wxLaunchUrl(slug: string): Promise<string> {
       bytes: Buffer.byteLength(body), html: /<!doctype|<html/i.test(body),
       challenge: /cf-chl-|challenge-platform/.test(body),
       accessDenied: /access.?denied|request blocked|forbidden/i.test(body),
-      generationFailed: /生成失败|generation failed/i.test(body),
+      // 授权配置中的 true 会被 GitHub 掩码；用固定文字分类保留诊断结果。
+      kind: /生成失败|generation failed/i.test(body) ? 'generation-failed' : 'unclassified',
       empty: body.trim().length === 0 }));
     throw new Error('WX_LINK_INVALID_JSON');
   }

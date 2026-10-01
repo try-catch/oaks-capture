@@ -44,7 +44,7 @@ test('异常链接响应分类且不泄露正文，非法 URL 按无效链接处
     globalThis.fetch = async () => new Response('自动生成失败: secret-session-token');
     await assert.rejects(wxLaunchUrl('coin_volcano_2'), error => error instanceof Error && error.message === 'WX_LINK_INVALID_JSON');
     const diagnostic = JSON.parse(diagnostics[0]);
-    assert.equal(diagnostic.generationFailed, true);
+    assert.equal(diagnostic.kind, 'generation-failed');
     assert.equal(diagnostic.html, false);
     assert.equal(diagnostics[0].includes('secret-session-token'), false);
     for (const body of [null, { success: true, data: 'invalid-secret-url' }]) {

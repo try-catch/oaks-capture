@@ -18,8 +18,18 @@ export async function wxLaunchUrl(slug: string): Promise<string> {
   });
   if (!response.ok) throw new Error(`WX_LINK_HTTP_${response.status}`);
   let result: { success?: boolean; data?: string } | null;
-  try { result = await response.json(); }
-  catch { throw new Error('WX_LINK_INVALID_JSON'); }
+  const body = await response.text();
+  try { result = JSON.parse(body); }
+  catch {
+    // 仅记录固定分类，不能把入口返回的会话令牌或错误正文写入公开日志。
+    console.error(JSON.stringify({ phase: 'wx-link-invalid-json', slug, status: response.status,
+      bytes: Buffer.byteLength(body), html: /<!doctype|<html/i.test(body),
+      challenge: /cf-chl-|challenge-platform/.test(body),
+      accessDenied: /access.?denied|request blocked|forbidden/i.test(body),
+      generationFailed: /生成失败|generation failed/i.test(body),
+      empty: body.trim().length === 0 }));
+    throw new Error('WX_LINK_INVALID_JSON');
+  }
   if (!result || typeof result !== 'object') throw new Error('WX_LINK_INVALID');
   if (result.success === false) throw new Error('WX_SOURCE_UNAVAILABLE');
   if (result.success !== true || typeof result.data !== 'string' || !isWxLaunchUrl(result.data, slug) ||

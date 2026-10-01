@@ -420,7 +420,12 @@ export async function captureGame(
       const built = buildPlayableActions(session.start, shop, definition.clientFamily, omitBuyFactor, stringBuyMode);
       // 使用当前会话倍数，购买与普通动作均保留合法最低投注。
       const actions = process.env.OAKS_SOURCE === "ggx" ? applyGgxSpinParams(built, session.start.settings?.bet_factor) : built;
-      if (!actions.length) throw new Error("start 没有可执行动作");
+      if (!actions.length) {
+        // 重登后可能进入未结束玩法；只记录状态和动作名称，不输出会话或响应正文。
+        const context = session.start.context ?? {};
+        const safeName = (value: unknown) => typeof value === "string" && /^[a-z_]{1,40}$/.test(value) ? value : "unknown";
+        throw new Error(`start 没有可执行动作 ${JSON.stringify({ current: safeName(context.current), round_finished: typeof context.round_finished === "boolean" ? context.round_finished : null, actions: (Array.isArray(context.actions) ? context.actions : []).map(safeName).slice(0, 5) })}`);
+      }
       const needed = modeQuota ? remainingModes()[0] : undefined;
       const action = captureRuntime?.pending()?.action ?? (modeQuota
         ? actions.find(candidate => needed && actionSpinType(candidate) === actionSpinType(needed))

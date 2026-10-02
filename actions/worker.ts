@@ -272,11 +272,13 @@ const quotaArgs = ['--target-per-feature', '10', '--normal-rounds', '100000', '-
 
 async function handleWxLaunchFailure(error: unknown): Promise<boolean> {
   const reason = reasonOf(error);
+  const retryable = reason.includes('Target page, context or browser has been closed');
+  if (retryable) await closeBrowserTransport();
   let released = false;
-  try { rpc('done', { status: 'failed', reason }); released = true; }
+  try { rpc('done', { status: retryable ? 'retryable' : 'failed', reason }); released = true; }
   catch { realLog(JSON.stringify({ worker, slug, note: 'WX_LAUNCH_DONE_FAILED' })); }
   realLog(JSON.stringify({ worker, slug, phase: 'wx-launch-failed', reason }));
-  if (['WX_SOURCE_UNAVAILABLE', 'WX_LINK_INVALID_JSON', 'WX_LINK_INVALID'].includes(reason) && released && !process.env.OAKS_SINGLE_GAME) {
+  if ((retryable || ['WX_SOURCE_UNAVAILABLE', 'WX_LINK_INVALID_JSON', 'WX_LINK_INVALID'].includes(reason)) && released && !process.env.OAKS_SINGLE_GAME) {
     await new Promise(resolve => setTimeout(resolve, numberFromEnv('OAKS_GAME_SWITCH_DELAY_MS', 10_000)));
     return true;
   }

@@ -286,7 +286,7 @@ export function modeCountsForTargets(counts: Record<number, number>, targets: Re
 export async function syncModeCountsFromMongo(collection: any, counts: Record<number, number>): Promise<void> {
   // NDJSON 恢复点可能落后于已确认入库的数据；模式配额以两者较大值为准，避免跨轮超采。
   const rows = await collection.aggregate([
-    { $match: { buy: { $gt: 0 } } },
+    { $match: { buy: { $gt: 0 }, testOnly: { $ne: true } } },
     { $group: { _id: "$buy", count: { $sum: 1 } } },
   ], { hint: { buy: 1 } }).toArray();
   for (const row of rows) {
@@ -333,9 +333,11 @@ export async function captureGame(
     countCoverage([document], counts, hashes);
     collectActionEvidence([document], actionEvidence);
     if (modeQuota) {
-      if (document.gameId !== game.gameId || document.game !== game.slug || document.testOnly === true) throw new Error("模式补量文件含不属于本游戏的样本");
+      if (document.gameId !== game.gameId || document.game !== game.slug) throw new Error("模式补量文件含不属于本游戏的样本");
       validateGameRound(game, document.data, Number(document.bet));
     }
+    // 保留并校验历史测试样本，但与正式验收一致，不把它们计入模式配额。
+    if (document.testOnly === true) continue;
     const type = roundSpinType(document.data, Number(document.buy ?? 0));
     const previous = priorModes.get(document.sourceRoundHash);
     if (previous !== undefined) modeCounts[previous]--;

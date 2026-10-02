@@ -29,7 +29,10 @@ test("分片模式可为每种购买和加注设置独立本地目标", () => {
 
 test("恢复时以 Mongo 已入库模式数量阻止跨轮超采", async () => {
   const counts = {0: 100000, 1: 10, 2: 8000};
-  const collection = {aggregate: () => ({toArray: async () => [{_id: 1, count: 22141}, {_id: 2, count: 7000}]})};
+  const collection = {aggregate: (pipeline: any[]) => {
+    assert.deepEqual(pipeline[0], { $match: { buy: { $gt: 0 }, testOnly: { $ne: true } } });
+    return {toArray: async () => [{_id: 1, count: 22141}, {_id: 2, count: 7000}]};
+  }};
   await syncModeCountsFromMongo(collection, counts);
   assert.deepEqual(counts, {0: 100000, 1: 22141, 2: 8000});
   assert.deepEqual(remainingModeActions(actions, counts, 100000, 10000), [second, booster]);

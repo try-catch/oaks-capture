@@ -350,6 +350,11 @@ class Store:
         quota.get('reservations', {}).pop(worker, None)
 
     def grant_claim(self, state, req, worker, node, slug, key, special_only, shard_index):
+        # 旧站购买局独占节点许可；普通局仍可共享空闲节点，不增加总会话预算。
+        if state['topology'].get('fillIdleNormal') and any(
+                claim.get('status') == 'running' and claim.get('node') == node
+                and (special_only or claim.get('specialOnly')) for claim in state['claims'].values()):
+            return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
         folder = self.root / 'output' / slug
         private = self.directory / slug
         private.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -530,7 +535,7 @@ class Store:
                 normal_running = sum(not claim.get('specialOnly') for claim in running)
                 if (not state['topology'].get('fillIdleNormal')
                         or normal_running >= max(0, state['topology']['maxClaims'] - len(unresolved_modes))
-                        or any(claim.get('specialOnly') and claim.get('node') == node for claim in running)):
+):
                     return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
 
             for slug in state['games']:

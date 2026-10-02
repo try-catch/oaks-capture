@@ -330,6 +330,11 @@ async function runThread(): Promise<void> {
     deadline = claimed.deadline;
     specialOnly = claimed.specialOnly === true;
     shardIndex = Number(claimed.shardIndex ?? 0);
+    // 新租约必须先清理旧游戏的内存请求状态，入口探测不能复用旧 play 响应。
+    pending = undefined;
+    requestKey = undefined;
+    localResponses.clear();
+    alternateLaunch = undefined;
     const directory = path.join(root, 'output', slug);
     const game = registry.games.find(game => game.slug === slug);
     if (process.env.OAKS_SOURCE === 'wx') {
@@ -372,8 +377,6 @@ async function runThread(): Promise<void> {
         break;
       }
     }
-    pending = undefined;
-    requestKey = undefined;
     console.log(JSON.stringify({ worker, slug, phase: 'claimed', deadline }));
     let status = 'incomplete';
     let reason = '';

@@ -350,10 +350,17 @@ class Store:
         quota.get('reservations', {}).pop(worker, None)
 
     def grant_claim(self, state, req, worker, node, slug, key, special_only, shard_index):
+        running = [claim for claim in state['claims'].values() if claim.get('status') == 'running']
         # 旧站购买局独占节点许可；普通局仍可共享空闲节点，不增加总会话预算。
         if state['topology'].get('fillIdleNormal') and any(
                 claim.get('status') == 'running' and claim.get('node') == node
                 and (special_only or claim.get('specialOnly')) for claim in state['claims'].values()):
+            return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
+        # 普通局先铺到空闲出口；最多等四个轮询上限，节点未启动时仍允许共享。
+        if (state['topology'].get('fillIdleNormal') and not special_only
+                and len({claim.get('node') for claim in running}) < state['topology']['nodes']
+                and any(claim.get('node') == node and time.time() * 1000
+                        - claim.get('claimedAt', 0) < CLAIM_WAIT_MAX_MS * 4 for claim in running)):
             return {'wait': claim_backoff(state, worker), 'deadline': state['deadline']}
         folder = self.root / 'output' / slug
         private = self.directory / slug
@@ -363,6 +370,7 @@ class Store:
             'slug': slug, 'worker': worker, 'status': 'running', 'node': node,
             'runner': req.get('runner', {}), 'baselineCount': baseline,
             'documentsWritten': 0, 'specialOnly': special_only, 'shardIndex': shard_index,
+            'claimedAt': time.time() * 1000,
         }
         if shard_index != 2:
             state['cursor'] = state['games'][(state['games'].index(slug) + 1) % len(state['games'])]

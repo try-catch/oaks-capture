@@ -179,6 +179,28 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(claim('1.1')['slug'], 'one')
         self.assertEqual(claim('3.1')['slug'], 'four')  # 普通局仍可共享空闲节点。
 
+    def test_normal_claims_prefer_idle_nodes_but_do_not_wait_forever(self):
+        self.call('end')
+        atomic(self.root / 'games/registry.json', {'games': [{'slug': slug} for slug in ('one', 'two', 'three', 'four')]})
+        state = read(self.store.state_path)
+        state['cursor'] = 'one'
+        atomic(self.store.state_path, state)
+        self.call('begin', nodes=3, maxClaims=4, fillIdleNormal=True)
+        def claim(worker):
+            return self.store.call({'op': 'claim', 'run': '100-1', 'worker': worker}, check_legacy=False)
+        self.assertEqual(claim('1.0')['slug'], 'one')
+        self.assertIn('wait', claim('1.1'))
+        self.assertEqual(claim('2.0')['slug'], 'two')
+        self.assertEqual(claim('3.0')['slug'], 'three')
+        self.assertEqual(claim('1.1')['slug'], 'four')  # 全部节点已使用后可共享。
+        self.call('end')
+        self.call('begin', nodes=3, maxClaims=4, fillIdleNormal=True)
+        first = claim('1.0')['slug']
+        state = read(self.store.state_path)
+        state['claims'][first]['claimedAt'] = time.time() * 1000 - CLAIM_WAIT_MAX_MS * 4 - 1
+        atomic(self.store.state_path, state)
+        self.assertIn('slug', claim('1.1'))  # 其他节点未启动也不会永久等待。
+
     def test_site_catalog_prioritizes_listed_games_without_hiding_others(self):
         atomic(self.root / 'games/registry.json', {'games': [
             {'slug': slug, 'discovery': {'settings': {'buyBonusPrices': {'1': 50}}}}

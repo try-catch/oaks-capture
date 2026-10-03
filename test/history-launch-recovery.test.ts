@@ -42,6 +42,19 @@ test('入口浏览器关闭先清理再交回退避租约，不停止其他游�
   const run = (message: string) => vm.runInNewContext(js(`${handler}\nhandleWxLaunchFailure(new Error(${JSON.stringify(message)}))`), sandbox);
   assert.equal(await run('page.waitForResponse: Target page, context or browser has been closed'), true);
   assert.deepEqual(events, ['close', 'retryable']); assert.equal(sandbox.process.exitCode, 0);
+  for (const reason of ['WX_LINK_HTTP_522', 'WX_LINK_HTTP_503',
+    'page.waitForResponse: Timeout 20000ms exceeded while waiting for event "response"']) {
+    events.length = 0;
+    assert.equal(await run(reason), true);
+    assert.deepEqual(events, ['close', 'retryable']);
+    assert.equal(sandbox.process.exitCode, 0);
+  }
+  sandbox.process.env.OAKS_SINGLE_GAME = 'fixture';
+  events.length = 0;
+  assert.equal(await run('WX_LINK_HTTP_522'), false);
+  assert.deepEqual(events, ['close', 'retryable']);
+  assert.equal(sandbox.process.exitCode, 1);
+  delete sandbox.process.env.OAKS_SINGLE_GAME;
   events.length = 0;
   assert.equal(await run('unexpected'), false); assert.deepEqual(events, ['failed']);
   assert.equal(sandbox.process.exitCode, 1);

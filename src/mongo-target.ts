@@ -7,7 +7,8 @@ import { MONGO_COLLECTION, MONGO_URI } from "../config";
 import { requiredFeatures } from "./capture-checkpoint";
 import { numberOption, selectGames, stringOption } from "./cli";
 import { ensureMongoIndexes, sourceRoundHash, syncMongoRounds } from "./mongo-store";
-import { auditModeQuota } from "./mode-target";
+import { declaredModeTypes, modeQuotaFromCounts } from "./mode-target";
+import { ndjsonLines } from "./ndjson-lines";
 
 export function mongoURI(target: string): string {
   if (target === "local") return process.env.OAKS_LOCAL_MONGO_URI ?? MONGO_URI;
@@ -73,23 +74,49 @@ export async function auditMongo(args: string[]): Promise<Array<Record<string, u
       const featureCounts = Object.fromEntries(await Promise.all(requiredFeatures(inventory.required ?? [], modeQuotaEnabled)
         .map(async (feature) => [feature, await collection.countDocuments({ features: feature })])));
       const missing = Object.entries(featureCounts).filter(([, count]) => Number(count) < minimum).map(([feature]) => feature);
-      const documents = await collection.find({}).toArray();
-      const source = await readNDJSON(path.join(__dirname, "..", "output", game.slug, `${game.slug}.ndjson`));
-      const sourceHashes = new Set(source.map(doc => String(doc.sourceRoundHash)));
-      const hashes = new Set(documents.map(doc => String(doc.sourceRoundHash)));
-      const contentValid = documents.every(doc => typeof doc.sourceRoundHash === "string" &&
-        doc.sourceRoundHash === sourceRoundHash(doc as unknown as { gameId?: number; game?: string; data: unknown }));
-      const countsMatch = source.length === documents.length && hashes.size === documents.length &&
-        sourceHashes.size === source.length && [...sourceHashes].every(hash => hashes.has(hash));
-      const normal = documents.filter(doc => doc.testOnly !== true && Array.isArray(doc.data) && roundSpinType(doc.data, Number(doc.buy ?? 0)) === 0);
-      const normalWin = normal.filter(doc => Number(doc.mul) > 0).length;
-      const normalLoss = normal.filter(doc => Number(doc.mul) === 0).length;
-      const total = documents.length;
-      const modeQuota = auditModeQuota(game, documents, normalRounds, targetPerMode);
+      const sourceHashes = new Set<string>();
+      const sourceModeCounts: Record<number, number> = Object.fromEntries(declaredModeTypes(game).map(type => [type, 0]));
+      let sourceCount = 0;
+      const sourceFile = path.join(__dirname, "..", "output", game.slug, `${game.slug}.ndjson`);
+      for await (const line of ndjsonLines(sourceFile)) {
+        let document: Record<string, any>;
+        try { document = JSON.parse(line); }
+        catch (error) { throw new Error(`${sourceFile}:${sourceCount + 1} JSON 非法: ${(error as Error).message}`); }
+        sourceCount++;
+        sourceHashes.add(String(document.sourceRoundHash));
+        if (document.testOnly !== true && Array.isArray(document.data)) {
+          const type = roundSpinType(document.data, Number(document.buy ?? 0));
+          if (type in sourceModeCounts) sourceModeCounts[type]++;
+        }
+      }
+      const hashes = new Set<string>();
+      const modeCounts: Record<number, number> = Object.fromEntries(declaredModeTypes(game).map(type => [type, 0]));
+      let contentValid = true;
+      let normalWin = 0;
+      let normalLoss = 0;
+      let total = 0;
+      for await (const doc of collection.find({})) {
+        total++;
+        const hash = String(doc.sourceRoundHash);
+        hashes.add(hash);
+        try {
+          if (typeof doc.sourceRoundHash !== "string" ||
+              doc.sourceRoundHash !== sourceRoundHash(doc as unknown as { gameId?: number; game?: string; data: unknown })) contentValid = false;
+        } catch { contentValid = false; }
+        if (doc.testOnly !== true && Array.isArray(doc.data)) {
+          const type = roundSpinType(doc.data, Number(doc.buy ?? 0));
+          if (type in modeCounts) modeCounts[type]++;
+          if (type === 0 && Number(doc.mul) > 0) normalWin++;
+          if (type === 0 && Number(doc.mul) === 0) normalLoss++;
+        }
+      }
+      const countsMatch = sourceCount === total && hashes.size === total &&
+        sourceHashes.size === sourceCount && [...sourceHashes].every(hash => hashes.has(hash));
+      const modeQuota = modeQuotaFromCounts(game, modeCounts, normalRounds, targetPerMode);
       const valid = uniqueHash && countsMatch && contentValid && missing.length === 0 && modeQuota.missing.length === 0 && normalWin > 0 && normalLoss > 0;
       const report = { brand: "3 OAKS", target, gameId: game.gameId, slug: game.slug, dbName: game.dbName, total,
-        sourceCount: source.length, countsMatch, contentValid, uniqueHash, normalWin, normalLoss, featureCounts, missing,
-        modeCounts: modeQuota.counts, modeTargets: modeQuota.targets, modeMissing: modeQuota.missing, valid };
+        sourceCount, countsMatch, contentValid, uniqueHash, normalWin, normalLoss, featureCounts, missing,
+        modeCounts: modeQuota.counts, sourceModeCounts, modeTargets: modeQuota.targets, modeMissing: modeQuota.missing, valid };
       const reportPath = path.join(__dirname, "..", "output", game.slug, `mongo-audit-${target}.json`);
       const temporary = `${reportPath}.part-${process.pid}`;
       await fs.writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`);

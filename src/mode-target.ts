@@ -7,6 +7,17 @@ export interface ModeQuota {
   missing: number[];
 }
 
+export function modeQuotaFromCounts(
+  game: RegistryGame,
+  counts: Record<number, number>,
+  normalTarget: number,
+  specialTarget: number,
+): ModeQuota {
+  const types = declaredModeTypes(game);
+  const targets = Object.fromEntries(types.map((type) => [type, type === 0 ? normalTarget : specialTarget]));
+  return { counts, targets, missing: types.filter((type) => (counts[type] ?? 0) < targets[type]) };
+}
+
 export function declaredModeTypes(game: RegistryGame): number[] {
   if (!game.discovery) throw new Error(`${game.slug} 缺少已核实的官方能力定义`);
   const settings = game.discovery.settings;
@@ -25,13 +36,11 @@ export function auditModeQuota(
   normalTarget: number,
   specialTarget: number,
 ): ModeQuota {
-  const types = declaredModeTypes(game);
-  const targets = Object.fromEntries(types.map((type) => [type, type === 0 ? normalTarget : specialTarget]));
-  const counts: Record<number, number> = Object.fromEntries(types.map((type) => [type, 0]));
+  const counts: Record<number, number> = Object.fromEntries(declaredModeTypes(game).map((type) => [type, 0]));
   for (const document of documents) {
     if (document.testOnly === true || !Array.isArray(document.data)) continue;
     const type = roundSpinType(document.data, Number(document.buy ?? 0));
     if (type in counts) counts[type] += 1;
   }
-  return { counts, targets, missing: types.filter((type) => counts[type] < targets[type]) };
+  return modeQuotaFromCounts(game, counts, normalTarget, specialTarget);
 }

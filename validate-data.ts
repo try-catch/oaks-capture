@@ -7,7 +7,8 @@ import { featureTarget, requiredFeatures } from "./src/capture-checkpoint";
 import { sourceRoundHash } from "./src/mongo-store";
 import { roundSpinType } from "./src/protocol";
 import { validateGameRound } from "./src/validators";
-import { auditModeQuota } from "./src/mode-target";
+import { declaredModeTypes, modeQuotaFromCounts } from "./src/mode-target";
+import { ndjsonLines } from "./src/ndjson-lines";
 
 function arg(name: string, fallback: string): string {
   const index = process.argv.indexOf(name);
@@ -25,7 +26,7 @@ async function main(): Promise<void> {
     : path.join("seed-data", `${game.slug}-feature-report.json`);
   const reportPath = path.resolve(__dirname, arg("--report", defaultReport));
   await fs.mkdir(path.dirname(reportPath), { recursive: true });
-  const lines = (await fs.readFile(source, "utf8")).split(/\r?\n/).filter(Boolean);
+  let documents = 0;
   const coverage: Record<string, number> = {};
   const examples: Record<string, number[]> = {};
   const errors: string[] = [];
@@ -36,11 +37,19 @@ async function main(): Promise<void> {
   let totalWin = 0;
   let randomPoolBet = 0;
   let randomPoolWin = 0;
+  let randomPoolDocuments = 0;
   let testOnlyDocuments = 0;
+  const modeCounts: Record<number, number> = Object.fromEntries(declaredModeTypes(game).map((type) => [type, 0]));
 
-  lines.forEach((line, index) => {
+  for await (const line of ndjsonLines(source)) {
+    documents++;
     try {
       const document = JSON.parse(line);
+      const spinType = Array.isArray(document.data) ? roundSpinType(document.data, Number(document.buy ?? 0)) : undefined;
+      if (document.testOnly !== true && spinType !== undefined && spinType in modeCounts) modeCounts[spinType]++;
+      if (document.testOnly !== true && Array.isArray(document.rtp) && document.rtp.length > 0 && spinType === 0) {
+        randomPoolDocuments++;
+      }
       if (/"(?:authorization|cookie|huid|queue|request_id|session_id|token)"\s*:/i.test(line)) {
         sensitiveDocuments++;
         throw new Error("包含禁止落盘的会话或敏感字段");
@@ -53,7 +62,7 @@ async function main(): Promise<void> {
       }
       hashes.add(hash);
       const bet = Number(document.bet);
-      const spinType = roundSpinType(document.data, Number(document.buy ?? 0));
+      const validatedSpinType = spinType ?? roundSpinType(document.data, Number(document.buy ?? 0));
       const validation = validateGameRound(game, document.data, bet);
       const expectedMul = validation.win / bet;
       if (Math.abs(Number(document.mul) - expectedMul) > 1e-9) {
@@ -63,7 +72,7 @@ async function main(): Promise<void> {
       totalWin += validation.win;
       if (document.testOnly === true || !Array.isArray(document.rtp) || document.rtp.length === 0) {
         testOnlyDocuments++;
-      } else if (spinType === 0) {
+      } else if (validatedSpinType === 0) {
         randomPoolBet += bet;
         randomPoolWin += validation.win;
       }
@@ -72,13 +81,13 @@ async function main(): Promise<void> {
       for (const feature of features) {
         if (spinType !== 0 && ["base-loss", "base-or-feature-win"].includes(feature)) continue;
         coverage[feature] = (coverage[feature] ?? 0) + 1;
-        (examples[feature] ??= []).push(index + 1);
+        (examples[feature] ??= []).push(documents);
         examples[feature] = examples[feature].slice(0, 10);
       }
     } catch (error) {
-      errors.push(`第 ${index + 1} 行：${(error as Error).message}`);
+      errors.push(`第 ${documents} 行：${(error as Error).message}`);
     }
-  });
+  }
 
   const inventoryPath = path.join(__dirname, "output", game.slug, "feature-inventory.json");
   const inventory = await fs.readFile(inventoryPath, "utf8").then((content) => JSON.parse(content)).catch(() => undefined);
@@ -90,16 +99,14 @@ async function main(): Promise<void> {
     modeQuotaEnabled && requestedRequired.length === 0);
   const targetPerFeature = Number(arg("--target-per-feature", "1"));
   const missing = required.filter((feature) => (coverage[feature] ?? 0) < featureTarget(feature, targetPerFeature));
-  const modeQuota = auditModeQuota(game, lines.map((line) => {
-    try { return JSON.parse(line); } catch { return {}; }
-  }), normalRounds, targetPerMode);
+  const modeQuota = modeQuotaFromCounts(game, modeCounts, normalRounds, targetPerMode);
   const report = {
     brand: "3 OAKS",
     game: game.slug,
     source,
     generatedAt: new Date().toISOString(),
-    documents: lines.length,
-    valid: lines.length - errors.length,
+    documents,
+    valid: documents - errors.length,
     invalid: errors.length,
     duplicates,
     sensitiveDocuments,
@@ -107,15 +114,7 @@ async function main(): Promise<void> {
     totalBet,
     totalWin,
     observedRtpPercent: totalBet ? Number((totalWin / totalBet * 100).toFixed(4)) : 0,
-    randomPoolDocuments: lines.filter((line) => {
-      try {
-        const document = JSON.parse(line);
-        return document.testOnly !== true && Array.isArray(document.rtp) && document.rtp.length > 0
-          && roundSpinType(document.data, Number(document.buy ?? 0)) === 0;
-      } catch {
-        return false;
-      }
-    }).length,
+    randomPoolDocuments,
     testOnlyDocuments,
     randomPoolRtpPercent: randomPoolBet ? Number((randomPoolWin / randomPoolBet * 100).toFixed(4)) : 0,
     coverage,

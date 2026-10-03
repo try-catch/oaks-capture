@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readRegistry } from "./catalog-sync";
 import { buildDataManifest, FinalizeDocument, MongoAuditSummary, ValidationSummary } from "./src/data-finalizer";
 import { numberOption, selectGames, stringOption } from "./src/cli";
-import { auditModeQuota } from "./src/mode-target";
+import { declaredModeTypes } from "./src/mode-target";
+import { ndjsonLines } from "./src/ndjson-lines";
 
 async function readJSON<T>(filename: string): Promise<T> {
   return JSON.parse(await fs.readFile(filename, "utf8")) as T;
@@ -27,12 +29,19 @@ async function main(): Promise<void> {
   for (const game of games) {
     const root = path.join(__dirname, "output", game.slug);
     const source = path.join(root, `${game.slug}.ndjson`);
-    const bytes = await fs.readFile(source);
-    const documents = bytes.toString("utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as FinalizeDocument);
+    const digest = crypto.createHash("sha256");
+    for await (const chunk of createReadStream(source)) digest.update(chunk);
+    const documents: FinalizeDocument[] = [];
+    let lineNumber = 0;
+    for await (const line of ndjsonLines(source)) {
+      lineNumber++;
+      try { documents.push(JSON.parse(line) as FinalizeDocument); }
+      catch (error) { throw new Error(`${source}:${lineNumber} JSON 非法: ${(error as Error).message}`); }
+    }
     const validation = await readJSON<ValidationSummary>(path.join(root, "validation-report.json"));
     const mongoAudit = await readJSON<MongoAuditSummary>(path.join(root, `mongo-audit-${stringOption(args, "--target", "test")}.json`));
-    const modeTargets = auditModeQuota(game, documents as unknown as Array<Record<string, any>>, normalRounds, targetPerMode).targets;
-    const manifest = buildDataManifest(game, documents, validation, crypto.createHash("sha256").update(bytes).digest("hex"), target, mongoAudit, modeTargets);
+    const modeTargets = Object.fromEntries(declaredModeTypes(game).map(type => [type, type === 0 ? normalRounds : targetPerMode]));
+    const manifest = buildDataManifest(game, documents, validation, digest.digest("hex"), target, mongoAudit, modeTargets);
     await atomicJSON(path.join(root, "data-manifest.json"), { ...manifest, generatedAt: new Date().toISOString() });
     manifests.push(manifest);
     console.log(`[finalize ${manifests.length}/${games.length}] ${game.slug} documents=${documents.length}`);

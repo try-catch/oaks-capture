@@ -114,7 +114,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: timeout --kill-after=20s 180s npx playwright install --with-deps ${{ inputs.mode == 'compare' && 'chrome' || 'chromium' }}
+      - run: sudo timeout --kill-after=20s 180s env "PATH=$PATH" "HOME=$HOME" npx playwright install --with-deps ${{ inputs.mode == 'compare' && 'chrome' || 'chromium' }}
       - run: python3 actions/setup-ssh.py
       - run: node -r ts-node/register actions/worker.ts ${{ inputs.mode }}
         env:
@@ -148,9 +148,9 @@ jobs:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: |
-          # 限制单次依赖安装耗时，避免镜像下载卡住耗尽整轮采集预算。
+          # 由 root 控制超时以清理 apt 子进程；保留用户 HOME，浏览器缓存仍供采集进程使用。
           for attempt in 1 2 3; do
-            timeout --kill-after=20s 180s npx playwright install --with-deps ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && 'chrome' || 'chromium' }} && break
+            sudo timeout --kill-after=20s 180s env "PATH=$PATH" "HOME=$HOME" npx playwright install --with-deps ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && 'chrome' || 'chromium' }} && break
             [[ "$attempt" == 3 ]] && exit 1
             sleep 10
           done

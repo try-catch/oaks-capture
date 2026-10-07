@@ -114,7 +114,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npx playwright install --with-deps ${{ inputs.mode == 'compare' && 'chrome' || 'chromium' }}
+      - run: timeout --kill-after=20s 180s npx playwright install --with-deps ${{ inputs.mode == 'compare' && 'chrome' || 'chromium' }}
       - run: python3 actions/setup-ssh.py
       - run: node -r ts-node/register actions/worker.ts ${{ inputs.mode }}
         env:
@@ -148,9 +148,9 @@ jobs:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: |
-          # 浏览器下载偶发 HTTP/2 断流，有限重试后仍失败则保留错误退出。
+          # 限制单次依赖安装耗时，避免镜像下载卡住耗尽整轮采集预算。
           for attempt in 1 2 3; do
-            npx playwright install --with-deps ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && 'chrome' || 'chromium' }} && break
+            timeout --kill-after=20s 180s npx playwright install --with-deps ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && 'chrome' || 'chromium' }} && break
             [[ "$attempt" == 3 ]] && exit 1
             sleep 10
           done

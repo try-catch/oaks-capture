@@ -273,7 +273,8 @@ const quotaArgs = ['--target-per-feature', '10', '--normal-rounds', '100000', '-
 async function handleWxLaunchFailure(error: unknown): Promise<boolean> {
   const reason = reasonOf(error);
   // 启动尚未进入投注：临时网关错误和响应超时交回协调器，沿用现有退避及重试上限。
-  const retryable = reason.includes('Target page, context or browser has been closed')
+  const retryable = reason === 'The operation was aborted due to timeout'
+    || reason.includes('Target page, context or browser has been closed')
     || /^WX_LINK_HTTP_(502|503|504|522)$/.test(reason)
     || /^page\.waitForResponse: Timeout \d+ms exceeded/.test(reason);
   if (retryable) await closeBrowserTransport();

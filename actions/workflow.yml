@@ -45,7 +45,8 @@ env:
   # 原生浏览器单节点 3000ms 探针通过；800ms 批量出现 429，先复用已验证的保守节奏。
   OAKS_NODE_SPACING_MS: '3000'
   OAKS_THROTTLE_LIMIT: '6'
-  OAKS_DEADLINE_MINUTES: '45'
+  # 100分钟监督周期内持续采90分钟，减少空转；不改变许可频率或活跃会话数。
+  OAKS_DEADLINE_MINUTES: ${{ inputs.mode == 'wx-capture' && '90' || '45' }}
   # 官网入口出现跨出口 429 后先保守降速；仍按 Retry-After 退避，不放宽并发门禁。
   OAKS_SPIN_DELAY_MS: '2000'
   OAKS_REQUEST_TIMEOUT_MS: '20000'
@@ -124,7 +125,7 @@ jobs:
     # 变量为 false 仍会启动 20 个节点。
     if: needs.prepare.result == 'success' && needs.prepare.outputs.capture == 'run'
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: ${{ inputs.mode == 'wx-capture' && 105 || 55 }}
     strategy:
       fail-fast: false
       max-parallel: 20

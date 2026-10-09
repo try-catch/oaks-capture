@@ -152,6 +152,8 @@ jobs:
           for attempt in 1 2 3; do
             sudo timeout --kill-after=20s 180s env "PATH=$PATH" "HOME=$HOME" npx playwright install --with-deps ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && 'chrome' || 'chromium' }} && break
             [[ "$attempt" == 3 ]] && exit 1
+            # 超时可能中断dpkg；先完成已解包配置，再重试浏览器安装。
+            sudo timeout --kill-after=20s 120s dpkg --configure -a || true
             sleep 10
           done
       - run: python3 actions/setup-ssh.py

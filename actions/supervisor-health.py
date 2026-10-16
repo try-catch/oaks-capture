@@ -50,8 +50,9 @@ def main():
                runnerEnvironments=sorted(set(x.get('runner', {}).get('environment', 'unknown')
                                              for x in state.get('claims', {}).values())),
                ndjsonBytes=sum(x.stat().st_size for x in (root / 'output').glob('*/*.ndjson')))
+    # 派发前多留 4 GiB 余量，避免刚启动就跌破协调器的 8 GiB 熔断线。
     out['hostHealthy'] = (pressure['cpu'] < 70 and pressure['io'] < 20 and pressure['memory'] < 10
-                          and memory['MemAvailable'] >= 8 * 1024**3 and max(swap.values()) < 1024
+                          and memory['MemAvailable'] >= 12 * 1024**3 and max(swap.values()) < 1024
                           and blocked <= max(8, (os.cpu_count() or 1) // 4))
     print(json.dumps(out))
 

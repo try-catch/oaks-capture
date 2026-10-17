@@ -225,6 +225,7 @@ export async function playRound(session: Session, action: PlayAction): Promise<J
   session = pending.session;
   action = pending.action;
   const frames: JSONMap[] = pending.frames;
+  if (captureRuntime?.shouldStop()) throw new Error("ACTIONS_BUDGET");
   captureRuntime?.savePending(pending);
   captureRuntime?.requestStep(pending.id, frames.length);
   let response = frames.at(-1) ?? await command(session.endpoint, session.cookie, "play", {
@@ -233,6 +234,7 @@ export async function playRound(session: Session, action: PlayAction): Promise<J
   });
   if (!frames.length) { frames.push(response); captureRuntime?.savePending(pending); }
   for (let step = 0; step < 100; step++) {
+    if (captureRuntime?.shouldStop()) throw new Error("ACTIONS_BUDGET");
     const name = nextAction(response);
     if (!name) return frames;
     captureRuntime?.requestStep(pending.id, frames.length);

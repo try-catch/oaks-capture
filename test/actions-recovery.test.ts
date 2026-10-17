@@ -29,6 +29,24 @@ test('恢复特殊局时复用已有帧和会话，不重新发起基础 spin', 
   } finally { globalThis.fetch = original; installCaptureRuntime(undefined); }
 });
 
+test('协调器截止时保留未完成局帧并停止后续请求', async () => {
+  const session = { endpoint: 'https://example.test', cookie: '', sessionId: 'fixture', defaultBet: 1 } as Session;
+  const action = { name: 'spin', params: {} } as PlayAction;
+  const first = { context: { actions: ['respin'], round_finished: false } };
+  let pending: PendingRound | undefined = { id: 'fixture-round', session, action, frames: [first] };
+  const original = globalThis.fetch;
+  let requests = 0;
+  installCaptureRuntime({ pending: () => pending, savePending: value => { pending = value; }, discardPending() { pending = undefined; },
+    requestStep() {}, writeDocument() {}, acknowledge() {}, syncFiles() {}, shouldStop: () => true });
+  globalThis.fetch = async () => { requests++; return new Response('{}', { status: 200 }); };
+  try {
+    await assert.rejects(playRound(session, action), { message: 'ACTIONS_BUDGET' });
+    assert.equal(requests, 0);
+    assert.equal(pending?.frames.length, 1);
+    assert.equal(pending?.frames[0], first);
+  } finally { globalThis.fetch = original; installCaptureRuntime(undefined); }
+});
+
 test('首帧及奖励续帧采用官方 Runner 请求字段，不发送仅供 UI 使用的 bet', async () => {
   const session = { endpoint: 'https://example.test', cookie: '', sessionId: 'fixture', defaultBet: 100 } as Session;
   const original = globalThis.fetch;

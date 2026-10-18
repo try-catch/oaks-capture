@@ -18,7 +18,7 @@ sandbox.browserFetch=sandbox.fetch;
 const code=`let slug='new_game',pending={},requestKey='old-play',alternateLaunch;
 const localResponses=new Map([['old-play',{body:Buffer.from('生成失败'),status:200,headers:{}}]]);
 const timing={permit:0,permitWait:0,fetch:0,respond:0,append:0,mongo:0,polls:0,documents:0};
-${functions(worker,['businessStatusCode','usableResponse','installDurability'])}
+${functions(worker,['numberFromEnv','businessStatusCode','usableResponse','installDurability'])}
 ${functions(launch,['isWxLaunchUrl','wxLaunchUrl'])}
 (async()=>{installDurability();let before;try{await wxLaunchUrl('new_game')}catch(e){before=e.message}
 ${reset}

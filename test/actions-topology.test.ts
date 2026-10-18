@@ -124,8 +124,11 @@ test("熔断节点交回租约并停止真实请求，但保留已落盘数据",
   assert.match(worker, /状态回写失败，需协调器核对租约；保留已落盘数据/);
 });
 
-test("采集 Runner 仍然禁止代理出口并强制 GitHub-hosted", () => {
+test("采集禁止代理，显式本地授权仍限定 Linux Docker", () => {
   assert.match(worker, /不允许配置出口代理/);
-  assert.match(worker, /采集仅允许在 GitHub-hosted Linux Runner 执行/);
+  assert.match(worker, /采集需要 GitHub-hosted Linux Runner 或显式启用的本地 Linux Docker/);
+  assert.match(worker, /OAKS_LOCAL_DOCKER === 'true'/);
+  assert.match(worker, /process.platform === 'linux'/);
+  assert.match(worker, /fs.existsSync\('\/.dockerenv'\)/);
   assert.match(worker, /真实采集需要服务商书面授权/);
 });

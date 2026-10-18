@@ -1,14 +1,18 @@
 name: 3 OAKS durable capture
-run-name: 3 OAKS ${{ inputs.mode || 'capture' }}
+run-name: 3 OAKS ${{ inputs.mode || 'capture' }}${{ inputs.single_node && ' (single node)' || '' }}
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: check 验证部署；probe 单节点验证试玩会话；wx-capture-node 用单个新节点采集WX全量目录
+        description: check 验证部署；probe 单节点验证试玩会话；capture 执行真实采集
         type: choice
-        options: [check, capture, probe, single, compare, wx-single, wx-capture, wx-capture-node]
+        options: [check, capture, probe, single, compare, wx-single, wx-capture]
         default: check
+      single_node:
+        description: wx-capture 时仅使用一个新 GitHub runner（默认 false）
+        type: boolean
+        default: false
   # 定时采集已停止（2026-09-13 交由 Codex 接手）。需要恢复时取消注释即可。
   # schedule:
   #   - cron: '*/20 * * * *'
@@ -68,8 +72,8 @@ jobs:
     timeout-minutes: 15
     env:
       OAKS_SOURCE: ${{ (inputs.mode == 'wx-single' || inputs.mode == 'wx-capture' || inputs.mode == 'wx-capture-node') && 'wx' || '' }}
-      OAKS_THREADS: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single') && '1' || inputs.mode == 'wx-capture-node' && '2' || '4' }}
-      OAKS_NODES: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single' || inputs.mode == 'wx-capture-node') && '1' || '20' }}
+      OAKS_THREADS: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single') && '1' || (inputs.mode == 'wx-capture' && inputs.single_node) && '2' || '4' }}
+      OAKS_NODES: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single' || (inputs.mode == 'wx-capture' && inputs.single_node)) && '1' || '20' }}
       OAKS_MAX_CLAIMS: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single') && '1' || '24' }}
       OAKS_SINGLE_GAME: ${{ inputs.mode == 'wx-single' && 'lucky_penny_2' || inputs.mode == 'single' && 'egypt_power_x1000' || '' }}
     outputs:
@@ -92,7 +96,7 @@ jobs:
           REQUESTED_MODE: ${{ inputs.mode }}
           CAPTURE_ENABLED: ${{ vars.CAPTURE_ENABLED }}
         run: |
-          if [[ "$CAPTURE_ENABLED" == true && ( "$GITHUB_EVENT_NAME" == schedule || "$GITHUB_EVENT_NAME" == push || "$REQUESTED_MODE" == capture || "$REQUESTED_MODE" == single || "$REQUESTED_MODE" == wx-single || "$REQUESTED_MODE" == wx-capture || "$REQUESTED_MODE" == wx-capture-node ) ]]; then
+          if [[ "$CAPTURE_ENABLED" == true && ( "$GITHUB_EVENT_NAME" == schedule || "$GITHUB_EVENT_NAME" == push || "$REQUESTED_MODE" == capture || "$REQUESTED_MODE" == single || "$REQUESTED_MODE" == wx-single || "$REQUESTED_MODE" == wx-capture ) ]]; then
             node -r ts-node/register actions/worker.ts begin
             # 仓库变量值 true 会被 GitHub 当作敏感值屏蔽；job output 若同值会被直接丢弃。
             echo 'capture=run' >> "$GITHUB_OUTPUT"
@@ -131,15 +135,15 @@ jobs:
       fail-fast: false
       max-parallel: 20
       matrix:
-        worker: ${{ fromJSON((inputs.mode == 'single' || inputs.mode == 'wx-single' || inputs.mode == 'wx-capture-node') && '[1]' || '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]') }}
+        worker: ${{ fromJSON((inputs.mode == 'single' || inputs.mode == 'wx-single' || (inputs.mode == 'wx-capture' && inputs.single_node)) && '[1]' || '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]') }}
     env:
       OAKS_WORKER: ${{ matrix.worker }}
-      OAKS_THREADS: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single') && '1' || inputs.mode == 'wx-capture-node' && '2' || '4' }}
-      OAKS_NODES: ${{ inputs.mode == 'wx-capture-node' && '1' || '20' }}
+      OAKS_THREADS: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single') && '1' || (inputs.mode == 'wx-capture' && inputs.single_node) && '2' || '4' }}
+      OAKS_NODES: ${{ (inputs.mode == 'wx-capture' && inputs.single_node) && '1' || '20' }}
       OAKS_SINGLE_GAME: ${{ inputs.mode == 'wx-single' && 'lucky_penny_2' || inputs.mode == 'single' && 'egypt_power_x1000' || '' }}
-      OAKS_SOURCE: ${{ (inputs.mode == 'wx-single' || inputs.mode == 'wx-capture' || inputs.mode == 'wx-capture-node') && 'wx' || '' }}
-      OAKS_BROWSER_TRANSPORT: ${{ (inputs.mode == 'wx-single' || inputs.mode == 'wx-capture' || inputs.mode == 'wx-capture-node') && '0' || '1' }}
-      OAKS_BROWSER_CHANNEL: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single' || inputs.mode == 'wx-capture' || inputs.mode == 'wx-capture-node') && 'chrome' || '' }}
+      OAKS_SOURCE: ${{ (inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && 'wx' || '' }}
+      OAKS_BROWSER_TRANSPORT: ${{ (inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && '0' || '1' }}
+      OAKS_BROWSER_CHANNEL: ${{ (inputs.mode == 'single' || inputs.mode == 'wx-single' || inputs.mode == 'wx-capture') && 'chrome' || '' }}
       OAKS_HEADER_DIAG: ${{ inputs.mode == 'single' && '1' || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

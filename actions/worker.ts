@@ -369,8 +369,8 @@ async function runThread(): Promise<void> {
     }
     try {
       if (!game) throw new Error('REGISTRY_MISMATCH');
-      if (process.env.OAKS_LOCAL_DOCKER === 'true') {
-        // 先走官网正常启动，只有入口可用且实际认领时才恢复归档历史。
+      if (!process.env.OAKS_SOURCE || process.env.OAKS_LOCAL_DOCKER === 'true') {
+        // 官网 Runner 与本地容器先验证正常入口，实际认领后才按需恢复归档历史。
         const { discoverGame } = await import('../src/game-definition');
         await discoverGame(slug);
         const restoredArchive = spawnSync('ssh', ['-F', process.env.OAKS_SSH_CONFIG!, 'oaks-store',
@@ -581,7 +581,7 @@ async function main(): Promise<void> {
       maxInFlight: threads * nodes,
       // 同时活跃的官方游戏会话数必须限制：demo 后端在大量并发会话时返回 GAME_REOPENED。
       maxClaims: numberFromEnv('OAKS_MAX_CLAIMS', 24),
-      fillIdleNormal: (process.env.OAKS_SOURCE === 'wx' || process.env.OAKS_LOCAL_DOCKER === 'true') && !process.env.OAKS_SINGLE_GAME,
+      fillIdleNormal: !process.env.OAKS_SINGLE_GAME,
       sharedEgress: process.env.OAKS_LOCAL_DOCKER === 'true',
       ...(process.env.OAKS_LOCAL_DOCKER === 'true' ? { allowedGames: JSON.parse(fs.readFileSync('/run/oaks/unfinished.json', 'utf8')) } : {}),
         claimStartSpacingMs: numberFromEnv('OAKS_CLAIM_START_SPACING_MS', 0),

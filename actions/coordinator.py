@@ -432,6 +432,11 @@ class Store:
             state['until'] = max(state['until'], until)
             registry = read(self.root / 'games' / 'registry.json')
             active_games = [game for game in registry['games'] if game.get('active', True)]
+            allowed = req.get('allowedGames')
+            if allowed is not None:
+                if not isinstance(allowed, list) or not allowed or any(not isinstance(x, str) or not re.fullmatch(r'[a-z0-9_]+', x) for x in allowed):
+                    raise ValueError('非法未完成游戏清单')
+                active_games = [game for game in active_games if game['slug'] in allowed]
             games = [game['slug'] for game in active_games]
             mode_set = {game['slug'] for game in active_games if has_special_modes(game)}
             cursor = state.get('cursor', handoff.get('slug'))
@@ -458,6 +463,8 @@ class Store:
                 # 非 workflow 调用仍保留保守回退；正式 workflow 会显式传入 24。
                 'maxClaims': positive_int(req.get('maxClaims'), 6),
                 'fillIdleNormal': req.get('fillIdleNormal') is True,
+                # 本地多个容器共享真实出口，所有请求共用一个限速桶。
+                'sharedEgress': req.get('sharedEgress') is True,
                 'maxShards': min(2, positive_int(req.get('maxShards'), 2)),
                 'claimStartSpacingMs': positive_int(req.get('claimStartSpacingMs'), 0),
                 'deadline': now + positive_int(req.get('deadlineMinutes'), 40) * 60_000,
@@ -475,7 +482,7 @@ class Store:
             state.update(owner=None, permit=None, permits={}, waiters=[])
             return {'released': True, 'claims': state.get('claims', {}), 'halted': state.get('halted', {}),
                     'metrics': state.get('metrics', {})}
-        if op in ('claim', 'permit') and node in state['halted']:
+        if op in ('claim', 'permit') and (node in state['halted'] or (state['topology'].get('sharedEgress') and 'local-egress' in state['halted'])):
             # 该出口已被熔断：立刻停机并保留已落盘数据，由新节点接手续采。
             # 必须早于租约校验，否则被交回租约的线程只会看到普通错误。
             return {'stop': True, 'halted': True}
@@ -716,6 +723,8 @@ class Store:
                     quota['unavailable'] = len(nodes) >= state['topology']['maxShards']
                 self.release_mode_reservation(state, worker, slug)
             return {}
+        if state['topology'].get('sharedEgress'):
+            node = 'local-egress'
         key = str(req.get('key', ''))
         if not re.fullmatch(r'[a-f0-9]{64}', key):
             raise ValueError('非法请求日志标识')
@@ -796,6 +805,8 @@ class Store:
                 state['rateNodes'] = window
                 if len({item['node'] for item in window}) >= max(GLOBAL_LIMIT_NODES, (state['topology']['nodes'] + 1) // 2):
                     # 大批出口同时被限速才判定为全局限制；少数出口仅各自遵守 Retry-After。
+                    state['until'] = max(state['until'], now + wait)
+                if state['topology'].get('sharedEgress'):
                     state['until'] = max(state['until'], now + wait)
                 if len(threads) >= state['topology']['throttleLimit']:
                     # 单节点内太多线程被限速：熔断该出口，保留数据并让新节点接续。

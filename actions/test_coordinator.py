@@ -22,6 +22,24 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.call('claim')['slug'], 'one')
         self.key = hashlib.sha256(b'request').hexdigest()
 
+    def test_local_containers_share_rate_and_retry_after(self):
+        self.call('end')
+        state = read(self.store.state_path)
+        state.pop('cursor', None)
+        atomic(self.store.state_path, state)
+        self.call('begin', sharedEgress=True, nodes=10, threads=1, nodeMs=3000)
+        self.call('claim')
+        key2 = hashlib.sha256(b'second').hexdigest()
+        self.store.call(dict(op='claim', run='100-1', worker='2', node='2'), check_legacy=False)
+        self.assertTrue(self.permit('1', 'one', self.key)['granted'])
+        other = self.permit('2', 'two', key2)
+        self.assertGreater(other['wait'], 0)
+        response = self.call('response', key=self.key, status=429, usable=False, retryAfter='60')
+        status = self.call('status')
+        self.assertTrue(status['topology']['sharedEgress'])
+        self.assertGreater(response['until'], time.time() * 1000 + 59000)
+        self.assertIn('local-egress', status['nodeUntil'])
+
     def tearDown(self):
         self.temp.cleanup()
 

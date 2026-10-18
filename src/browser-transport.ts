@@ -46,6 +46,7 @@ async function browserPage(): Promise<Page> {
   session ??= (async () => {
     const wx = process.env.OAKS_SOURCE === 'wx';
     const browser = await chromium.launch({ headless: true,
+      ...(process.env.OAKS_BROWSER_EXECUTABLE ? { executablePath: process.env.OAKS_BROWSER_EXECUTABLE } : {}),
       ...(process.env.OAKS_BROWSER_CHANNEL === 'chrome' ? { channel: 'chrome' as const } : {}) });
     try {
       const context = await browser.newContext();

@@ -121,9 +121,10 @@ function requireProviderAuthorization(): void {
     throw new Error('真实采集需要服务商书面授权并设置 OAKS_PROVIDER_AUTHORIZED=true');
   }
 }
-function requireGithubHosted(): void {
-  if (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted' || process.platform !== 'linux') {
-    throw new Error('采集仅允许在 GitHub-hosted Linux Runner 执行');
+function requireCaptureEnvironment(): void {
+  const local = process.env.OAKS_LOCAL_DOCKER === 'true' && process.platform === 'linux' && fs.existsSync('/.dockerenv');
+  if (!local && (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted' || process.platform !== 'linux')) {
+    throw new Error('采集需要 GitHub-hosted Linux Runner 或显式启用的本地 Linux Docker');
   }
   if (['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'].some(key => process.env[key])) {
     throw new Error('采集 Runner 不允许配置出口代理');
@@ -217,7 +218,7 @@ function installDurability(): void {
     try {
       const transport = process.env.OAKS_SOURCE === 'wx' && url === 'https://www.wxgame99.com/api/game_link'
         ? browserFetch : officialFetch;
-      response = await transport(input, { ...options, signal: AbortSignal.timeout(20_000) });
+      response = await transport(input, { ...options, signal: AbortSignal.timeout(numberFromEnv('OAKS_REQUEST_TIMEOUT_MS', 20_000)) });
     } catch (error) {
       realLog(JSON.stringify({ phase: 'protocol-fetch-error', slug, worker,
         ...fetchFailureDiagnostic(url, error), elapsedMs: Date.now() - fetchStarted }));
@@ -292,7 +293,7 @@ async function handleWxLaunchFailure(error: unknown): Promise<boolean> {
 
 // 单个线程独占一个游戏租约，持续恢复到配额达标或本轮预算耗尽为止。
 async function runThread(): Promise<void> {
-  requireGithubHosted();
+  requireCaptureEnvironment();
   requireProviderAuthorization();
   if (!isIP(egress.trim())) throw new Error('无法核实 Runner 出口');
   egress = egress.trim();
@@ -356,6 +357,16 @@ async function runThread(): Promise<void> {
     }
     try {
       if (!game) throw new Error('REGISTRY_MISMATCH');
+      if (process.env.OAKS_LOCAL_DOCKER === 'true') {
+        // 先走官网正常启动，只有入口可用且实际认领时才恢复归档历史。
+        const { discoverGame } = await import('../src/game-definition');
+        await discoverGame(slug);
+        const restoredArchive = spawnSync('ssh', ['-F', process.env.OAKS_SSH_CONFIG!, 'oaks-store',
+          `sudo python3 - ${slug}`], { input: fs.readFileSync(path.join(root, 'actions/restore-archived.py')),
+          timeout: 600_000, encoding: 'utf8' });
+        if (restoredArchive.status !== 0) throw new Error('ARCHIVED_HISTORY_RESTORE_FAILED');
+        realLog(JSON.stringify({ worker, slug, phase: 'archive-checked' }));
+      }
       const restored = rpc('load', { chunked: true });
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
       const restoreStarted = Date.now();
@@ -364,7 +375,8 @@ async function runThread(): Promise<void> {
       const filesStarted = Date.now();
       for (const [name, value] of Object.entries(restored.files)) fs.writeFileSync(path.join(directory, name), String(value), { mode: 0o600 });
       realLog(JSON.stringify({ worker, slug, phase: 'restore-files-complete', elapsedMs: Date.now() - filesStarted }));
-    } catch {
+    } catch (error) {
+      realLog(JSON.stringify({ worker, slug, phase: 'prepare-error', reason: reasonOf(error) }));
       // 准备阶段没有新数据；不要写回半份覆盖率，也不遗留 running 租约。
       const status = stopped() ? 'paused' : 'failed';
       try { rpc('done', { status, reason: 'RESTORE_FAILED' }); } catch { /* 通道不可用时由 end 收口。 */ }
@@ -453,7 +465,7 @@ async function runThread(): Promise<void> {
 
 // 单节点线程池：每个线程独立认领游戏，任一节点被官方封控时整机停机并保留数据。
 async function supervise(): Promise<void> {
-  requireGithubHosted();
+  requireCaptureEnvironment();
   requireProviderAuthorization();
   egress = await discoverEgress();
   const threads = activeThreads();
@@ -473,7 +485,7 @@ async function supervise(): Promise<void> {
 async function main(): Promise<void> {
   const mode = process.argv[2];
   if (mode === 'probe' || mode === 'compare') {
-    requireGithubHosted();
+    requireCaptureEnvironment();
     requireProviderAuthorization();
     egress = await discoverEgress();
     let owned = false;
@@ -540,7 +552,7 @@ async function main(): Promise<void> {
   // 常驻通道会吊住事件循环，每个模式结束时都必须显式收尾，否则进程跑完不退出。
   if (mode === 'thread') { try { await runThread(); } finally { await closeBrowserTransport(); channel.close(); } return; }
   if (mode === 'begin') {
-    requireGithubHosted();
+    requireCaptureEnvironment();
     requireProviderAuthorization();
     const threads = activeThreads();
     const nodes = numberFromEnv('OAKS_NODES', 1);
@@ -556,7 +568,9 @@ async function main(): Promise<void> {
       maxInFlight: threads * nodes,
       // 同时活跃的官方游戏会话数必须限制：demo 后端在大量并发会话时返回 GAME_REOPENED。
       maxClaims: numberFromEnv('OAKS_MAX_CLAIMS', 24),
-      fillIdleNormal: process.env.OAKS_SOURCE === 'wx' && !process.env.OAKS_SINGLE_GAME,
+      fillIdleNormal: (process.env.OAKS_SOURCE === 'wx' || process.env.OAKS_LOCAL_DOCKER === 'true') && !process.env.OAKS_SINGLE_GAME,
+      sharedEgress: process.env.OAKS_LOCAL_DOCKER === 'true',
+      ...(process.env.OAKS_LOCAL_DOCKER === 'true' ? { allowedGames: JSON.parse(fs.readFileSync('/run/oaks/unfinished.json', 'utf8')) } : {}),
         claimStartSpacingMs: numberFromEnv('OAKS_CLAIM_START_SPACING_MS', 0),
         maxShards: numberFromEnv('OAKS_SHARDS_PER_GAME', 2),
         deadlineMinutes: numberFromEnv('OAKS_DEADLINE_MINUTES', 40),
@@ -567,7 +581,7 @@ async function main(): Promise<void> {
   if (mode === 'end') { try { console.log(JSON.stringify(rpc('end'))); } finally { channel.close(); } return; }
   if (mode === 'status') { try { console.log(JSON.stringify(rpc('status'))); } finally { channel.close(); } return; }
   if (mode === 'check') {
-    requireGithubHosted();
+    requireCaptureEnvironment();
     try {
       const status = rpc('status');
       if (status.restoreChunkBytes !== 512 * 1024) throw new Error('协调器尚未支持分块恢复，禁止启动新采集');

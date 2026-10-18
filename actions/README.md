@@ -39,3 +39,11 @@ Secrets：`OAKS_SSH_KEY`、`OAKS_KNOWN_HOSTS`、`OAKS_SSH_HOST`、`OAKS_MONGO_HO
 2026-10-01 旧源恢复优化：明确用 `wx-single` 验收和 `wx-capture` 正式采集。单游戏参数在加载采集器前设置，定向配额只提交目标模式计数，验收每个完整局立即确认 Mongo。20 节点、24 活跃会话时每节点只启动 2 个进程，总进程从 80 降为 40。
 
 历史文件通过已认证 SSH 的 `gzip -1` 流传输，Runner 解压后校验原始字节数、fsync，再原子替换；异常保留原文件，服务端历史不改动。数量不一致时每 500 局按唯一哈希查询 Mongo，仅回填缺失局；不再反复传输已入库的完整历史。真实速度以实机完整局入库和 `restore-complete`、`timing` 日志为准。
+
+## 本地官网容器验收（2026-10-18）
+
+用户可显式授权本地 Linux Docker：设置 `OAKS_LOCAL_DOCKER=true`，仍要求服务商授权标记、禁止出口代理，保留远端协调器与 SSH Mongo 隧道。`/run/oaks/unfinished.json` 限定本轮未完成游戏；每模式仍按原始 Mongo 历史配额停止，完成游戏不重建历史。10 个容器每个 1 进程、最多 10 会话，`sharedEgress=true` 使它们共享 3000ms 请求许可和 Retry-After；购买优先，空位可补普通。
+
+启动前必须确认 GitHub 全部运行已结束、协调器 owner 已释放、主机健康且冷却到期。`actions/local-docker-entry.sh` 启动已验证 SSH 隧道，等待 `/run/oaks/go`，再运行现有 worker。官网入口成功后，对缺失且有归档标记的历史调用 `restore-archived.py`；该脚本在协调锁外按标记的 dbName 导出 Mongo，检查完整有效局、唯一哈希和数量，fsync 后原子恢复。失败保留归档状态，禁止空文件续采。
+
+本地容器不能伪装 GitHub Runner；`RUNNER_ENVIRONMENT=local-docker`。浏览器可通过 `OAKS_BROWSER_EXECUTABLE` 选择容器内已安装的原生 Chromium。30 分钟后以独立保存的 Mongo 基线及完整局质量核验报告新增，不能以请求量或容器退出码代替。

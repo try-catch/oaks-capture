@@ -23,6 +23,7 @@ let requestKey: string | undefined;
 let deadline = 0;
 let stopping = false;
 let specialOnly = false;
+let lastProgressAt = 0;
 let shardIndex = 0;
 let egress = process.env.OAKS_EGRESS ?? '';
 const documentBatch: string[] = [];
@@ -152,7 +153,14 @@ function installDurability(): void {
     pending: () => pending,
     // 未完成局只在进程内保留：跨运行恢复已被移除，服务端 round.json 不再参与恢复。
     // 每轮省掉一次 SSH 往返（实测单次约 0.5-1 秒），这是每轮固定开销的大头之一。
-    savePending: value => { pending = value; },
+    savePending: value => {
+      pending = value;
+      if (process.env.OAKS_LOCAL_DOCKER === 'true' && Date.now() - lastProgressAt >= 30_000) {
+        lastProgressAt = Date.now();
+        realLog(JSON.stringify({ worker, slug, phase: 'round-progress', frames: value.frames.length,
+          docs: timing.documents, permitWaitMs: timing.permitWait, fetchMs: timing.fetch }));
+      }
+    },
     // 丢弃未完成局时必须一并清掉请求日志键：否则后续请求会复用同一键，
     // 被协调器用旧响应重放（重新登录也会命中缓存，拿到假会话）。
     discardPending: () => {
@@ -166,8 +174,8 @@ function installDurability(): void {
       // 旧实现每条都传 document + line 两份完整内容并单独 fsync，是过载主因。
       documentBatch.push(JSON.stringify(document));
       timing.documents += 1;
-      if (documentBatch.length >= 25) flushDocuments();
-      if (process.env.OAKS_SINGLE_GAME || timing.documents % 25 === 0) {
+      if (process.env.OAKS_LOCAL_DOCKER === 'true' || documentBatch.length >= 25) flushDocuments();
+      if (process.env.OAKS_SINGLE_GAME || process.env.OAKS_LOCAL_DOCKER === 'true' || timing.documents % 25 === 0) {
         const n = timing.documents;
         realLog(JSON.stringify({
           worker, phase: 'timing', docs: n,
@@ -183,7 +191,11 @@ function installDurability(): void {
       pending = undefined;
       requestKey = undefined;
     },
-    noteMongo: ms => { timing.mongo += ms; },
+    noteMongo: ms => {
+      timing.mongo += ms;
+      if (process.env.OAKS_LOCAL_DOCKER === 'true') realLog(JSON.stringify({ worker, slug,
+        phase: 'mongo-confirmed', docs: timing.documents, elapsedMs: ms }));
+    },
     sessionReady: game => realLog(JSON.stringify({ worker, slug: game, phase: 'session-ready' })),
     reserveModeTargets: (counts, targets) => rpc('reserve_modes', { counts, targets }).targets,
     syncFiles,
@@ -378,10 +390,11 @@ async function runThread(): Promise<void> {
     } catch (error) {
       realLog(JSON.stringify({ worker, slug, phase: 'prepare-error', reason: reasonOf(error) }));
       // 准备阶段没有新数据；不要写回半份覆盖率，也不遗留 running 租约。
-      const status = stopped() ? 'paused' : 'failed';
-      try { rpc('done', { status, reason: 'RESTORE_FAILED' }); } catch { /* 通道不可用时由 end 收口。 */ }
-      realLog(JSON.stringify({ worker, slug, phase: 'restore', status, reason: 'RESTORE_FAILED' }));
+      const status = stopped() ? 'paused' : recoverableRoundError(error) ? 'retryable' : 'failed';
+      try { rpc('done', { status, reason: status === 'retryable' ? 'ENTRY_RETRYABLE' : 'RESTORE_FAILED' }); } catch { /* 通道不可用时由 end 收口。 */ }
+      realLog(JSON.stringify({ worker, slug, phase: 'restore', status, reason: status === 'retryable' ? 'ENTRY_RETRYABLE' : 'RESTORE_FAILED' }));
       if (status === 'failed') process.exitCode = 1;
+      if (status === 'retryable') continue;
       break;
     }
     if (process.env.OAKS_SOURCE === 'wx') {
@@ -403,7 +416,7 @@ async function runThread(): Promise<void> {
     const originalWarn = console.warn;
     console.log = console.warn = () => {};
     try {
-      await captureGame(game!, undefined, { partialModeQuota: specialOnly, skipMongoSync: shardIndex > 1, flushEveryRound: !!process.env.OAKS_SINGLE_GAME });
+      await captureGame(game!, undefined, { partialModeQuota: specialOnly, skipMongoSync: shardIndex > 1, flushEveryRound: !!process.env.OAKS_SINGLE_GAME || process.env.OAKS_LOCAL_DOCKER === 'true' });
       console.log = originalLog;
       console.warn = originalWarn;
       if (specialOnly) {

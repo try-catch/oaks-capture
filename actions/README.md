@@ -47,3 +47,5 @@ Secrets：`OAKS_SSH_KEY`、`OAKS_KNOWN_HOSTS`、`OAKS_SSH_HOST`、`OAKS_MONGO_HO
 启动前必须确认 GitHub 全部运行已结束、协调器 owner 已释放、主机健康且冷却到期。`actions/local-docker-entry.sh` 启动已验证 SSH 隧道，等待 `/run/oaks/go`，再运行现有 worker。官网入口成功后，对缺失且有归档标记的历史调用 `restore-archived.py`；该脚本在协调锁外按标记的 dbName 导出 Mongo，检查完整有效局、唯一哈希和数量，fsync 后原子恢复。失败保留归档状态，禁止空文件续采。
 
 本地容器不能伪装 GitHub Runner；`RUNNER_ENVIRONMENT=local-docker`。浏览器可通过 `OAKS_BROWSER_EXECUTABLE` 选择容器内已安装的原生 Chromium。30 分钟后以独立保存的 Mongo 基线及完整局质量核验报告新增，不能以请求量或容器退出码代替。
+
+本地30分钟验收不沿用正式长跑的25局缓冲：每个完整局立即提交远端NDJSON并确认Mongo，日志记录`mongo-confirmed`，每30秒记录当前奖励帧数。官网入口的`GAME_REOPENED`等既有可恢复错误应交回`retryable`，不能误记历史损坏并退出。统计必须额外检查Mongo新插入中的所有模式（包括1001等加注编号），缺少历史基线的模式按新ObjectId与采集时间窗口统计并注明限制。
